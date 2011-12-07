@@ -1,0 +1,16 @@
+2007-01-13  Ulrich Drepper  <drepper@redhat.com>
+
+	* nis/nss_nis/nis-service.c (_nss_nis_getservbyname_r): Correct
+	computation of keylen.
+
+--- libc/nis/nss_nis/nis-service.c	19 Aug 2006 18:36:25 -0000	1.36
++++ libc/nis/nss_nis/nis-service.c	14 Jan 2007 04:30:39 -0000	1.37
+@@ -271,7 +271,7 @@ _nss_nis_getservbyname_r (const char *na
+ 
+   /* If the protocol is given, we could try if our NIS server knows
+      about services.byservicename map. If yes, we only need one query.  */
+-  size_t keylen = strlen (name) + 1 + (protocol ? strlen (protocol) : 0);
++  size_t keylen = strlen (name) + (protocol ? 1 + strlen (protocol) : 0);
+   char key[keylen + 1];
+ 
+   /* key is: "name/proto" */

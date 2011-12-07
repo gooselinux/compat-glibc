@@ -1,0 +1,215 @@
+2009-05-18  Jakub Jelinek  <jakub@redhat.com>
+	    Ulrich Drepper  <drepper@redhat.com>
+
+	* nscd/nscd_helper.c (MINIMUM_HASHENTRY_SIZE): Define.
+	(__nscd_cache_search): Assume each entry in the
+	hash chain needs one hashentry and half of datahead.  Use
+	MINIMUM_HASHENTRY_SIZE instead of sizeof(hashentry).
+
+2009-05-16  Ulrich Drepper  <drepper@redhat.com>
+
+	* nscd/nscd_helper.c (__nscd_cache_search): Fix exit condition in last
+	patch.
+
+2009-05-15  Ulrich Drepper  <drepper@redhat.com>
+
+	* nscd/nscd_helper.c (__nscd_cache_search): Introduce loop counter.
+	Use it if we absolutely cannot reach any more correct list elements
+	because that many do not fit into the currently mapped database.
+
+2009-05-14  Jakub Jelinek  <jakub@redhat.com>
+ 
+	* nscd/nscd_helper.c: Include stddef.h.
+	(__nscd_cache_search): Add datalen argument.  Use atomic_forced_read
+	in a couple of places.  Return NULL if trail is not less than
+	datasize, don't consider dataheads with length smaller than
+	offsetof (struct datahead, data) + datalen.
+	* nscd/nscd_client.h (__nscd_cache_search): Adjust prototype.
+	* nscd/nscd_gethst_r.c (nscd_gethst_r): Adjust callers.
+	* nscd/nscd_getpw_r.c (nscd_getpw_r): Likewise.
+	* nscd/nscd_getgr_r.c (nscd_getgr_r): Likewise.
+	* nscd/nscd_getai.c (__nscd_getai): Likewise.
+	* nscd/nscd_initgroups.c (__nscd_getgrouplist): Likewise.
+
+--- libc/nscd/nscd_helper.c
++++ libc/nscd/nscd_helper.c
+@@ -21,6 +21,7 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <stdbool.h>
++#include <stddef.h>
+ #include <string.h>
+ #include <time.h>
+ #include <unistd.h>
+@@ -467,23 +468,36 @@ __nscd_get_map_ref (request_type type, const char *name,
+ }
+ 
+ 
++/* Using sizeof (hashentry) is not always correct to determine the size of
++   the data structure as found in the nscd cache.  The program could be
++   a 64-bit process and nscd could be a 32-bit process.  In this case
++   sizeof (hashentry) would overestimate the size.  The following is
++   the minimum size of such an entry, good enough for our tests here.  */
++#define MINIMUM_HASHENTRY_SIZE \
++  (offsetof (struct hashentry, dellist) + sizeof (int32_t))
++
++
+ /* Don't return const struct datahead *, as eventhough the record
+    is normally constant, it can change arbitrarily during nscd
+    garbage collection.  */
+ struct datahead *
+ __nscd_cache_search (request_type type, const char *key, size_t keylen,
+-		     const struct mapped_database *mapped)
++		     const struct mapped_database *mapped, size_t datalen)
+ {
+   unsigned long int hash = __nis_hash (key, keylen) % mapped->head->module;
+   size_t datasize = mapped->datasize;
+ 
+   ref_t trail = mapped->head->array[hash];
++  trail = atomic_forced_read (trail);
+   ref_t work = trail;
++  size_t loop_cnt = datasize / (MINIMUM_HASHENTRY_SIZE
++				+ offsetof (struct datahead, data) / 2);
+   int tick = 0;
+ 
+-  while (work != ENDREF && work + sizeof (struct hashentry) <= datasize)
++  while (work != ENDREF && work + MINIMUM_HASHENTRY_SIZE <= datasize)
+     {
+       struct hashentry *here = (struct hashentry *) (mapped->data + work);
++      ref_t here_key, here_packet;
+ 
+ #ifndef _STRING_ARCH_unaligned
+       /* Although during garbage collection when moving struct hashentry
+@@ -498,13 +512,14 @@ __nscd_cache_search (request_type type, const char *key, size_t keylen,
+ 
+       if (type == here->type
+ 	  && keylen == here->len
+-	  && here->key + keylen <= datasize
+-	  && memcmp (key, mapped->data + here->key, keylen) == 0
+-	  && here->packet + sizeof (struct datahead) <= datasize)
++	  && (here_key = atomic_forced_read (here->key)) + keylen <= datasize
++	  && memcmp (key, mapped->data + here_key, keylen) == 0
++	  && ((here_packet = atomic_forced_read (here->packet))
++	      + sizeof (struct datahead) <= datasize))
+ 	{
+ 	  /* We found the entry.  Increment the appropriate counter.  */
+ 	  struct datahead *dh
+-	    = (struct datahead *) (mapped->data + here->packet);
++	    = (struct datahead *) (mapped->data + here_packet);
+ 
+ #ifndef _STRING_ARCH_unaligned
+ 	  if ((uintptr_t) dh & (__alignof__ (*dh) - 1))
+@@ -513,14 +528,17 @@ __nscd_cache_search (request_type type, const char *key, size_t keylen,
+ 
+ 	  /* See whether we must ignore the entry or whether something
+ 	     is wrong because garbage collection is in progress.  */
+-	  if (dh->usable && here->packet + dh->allocsize <= datasize)
++	  if (dh->usable
++	      && here_packet + dh->allocsize <= datasize
++	      && (here_packet + offsetof (struct datahead, data) + datalen
++		  <= datasize))
+ 	    return dh;
+ 	}
+ 
+-      work = here->next;
++      work = atomic_forced_read (here->next);
+       /* Prevent endless loops.  This should never happen but perhaps
+ 	 the database got corrupted, accidentally or deliberately.  */
+-      if (work == trail)
++      if (work == trail || loop_cnt-- == 0)
+ 	break;
+       if (tick)
+ 	{
+@@ -532,7 +550,11 @@ __nscd_cache_search (request_type type, const char *key, size_t keylen,
+ 	  if ((uintptr_t) trailelem & (__alignof__ (*trailelem) - 1))
+ 	    return NULL;
+ #endif
+-	  trail = trailelem->next;
++
++	  if (trail + MINIMUM_HASHENTRY_SIZE > datasize)
++	    return NULL;
++
++	  trail = atomic_forced_read (trailelem->next);
+ 	}
+       tick = 1 - tick;
+     }
+--- libc/nscd/nscd-client.h
++++ libc/nscd/nscd-client.h
+@@ -44,7 +44,7 @@
+ /* Path for the configuration file.  */
+ #define _PATH_NSCDCONF	 "/etc/nscd.conf"
+ 
+-/* Maximu allowed length for the key.  */
++/* Maximum allowed length for the key.  */
+ #define MAXKEYLEN 1024
+ 
+ 
+@@ -329,7 +329,8 @@ static inline int __nscd_drop_map_ref (struct mapped_database *map,
+ extern struct datahead *__nscd_cache_search (request_type type,
+ 					     const char *key,
+ 					     size_t keylen,
+-					     const struct mapped_database *mapped);
++					     const struct mapped_database *mapped,
++					     size_t datalen);
+ 
+ /* Wrappers around read, readv and write that only read/write less than LEN
+    bytes on error or EOF.  */
+--- libc/nscd/nscd_gethst_r.c
++++ libc/nscd/nscd_gethst_r.c
+@@ -137,7 +138,8 @@ nscd_gethst_r (const char *key, size_t keylen, request_type type,
+   if (mapped != NO_MAPPING)
+     {
+       /* No const qualifier, as it can change during garbage collection.  */
+-      struct datahead *found = __nscd_cache_search (type, key, keylen, mapped);
++      struct datahead *found = __nscd_cache_search (type, key, keylen, mapped,
++						    sizeof hst_resp);
+       if (found != NULL)
+ 	{
+ 	  h_name = (char *) (&found->data[0].hstdata + 1);
+--- libc/nscd/nscd_getpw_r.c
++++ libc/nscd/nscd_getpw_r.c
+@@ -104,7 +104,8 @@ nscd_getpw_r (const char *key, size_t keylen, request_type type,
+ 
+   if (mapped != NO_MAPPING)
+     {
+-      struct datahead *found = __nscd_cache_search (type, key, keylen, mapped);
++      struct datahead *found = __nscd_cache_search (type, key, keylen, mapped,
++						    sizeof pw_resp);
+       if (found != NULL)
+ 	{
+ 	  pw_name = (const char *) (&found->data[0].pwdata + 1);
+--- libc/nscd/nscd_getgr_r.c
++++ libc/nscd/nscd_getgr_r.c
+@@ -107,7 +107,8 @@ nscd_getgr_r (const char *key, size_t keylen, request_type type,
+ 
+   if (mapped != NO_MAPPING)
+     {
+-      struct datahead *found = __nscd_cache_search (type, key, keylen, mapped);
++      struct datahead *found = __nscd_cache_search (type, key, keylen, mapped,
++						    sizeof gr_resp);
+       if (found != NULL)
+ 	{
+ 	  len = (const uint32_t *) (&found->data[0].grdata + 1);
+--- libc/nscd/nscd_getai.c
++++ libc/nscd/nscd_getai.c
+@@ -75,7 +76,7 @@ __nscd_getai (const char *key, struct nscd_ai_result **result, int *h_errnop)
+   if (mapped != NO_MAPPING)
+     {
+       struct datahead *found = __nscd_cache_search (GETAI, key, keylen,
+-						    mapped);
++						    mapped, sizeof ai_resp);
+       if (found != NULL)
+ 	{
+ 	  respdata = (char *) (&found->data[0].aidata + 1);
+--- libc/nscd/nscd_initgroups.c
++++ libc/nscd/nscd_initgroups.c
+@@ -55,7 +55,8 @@ __nscd_getgrouplist (const char *user, gid_t group, long int *size,
+   if (mapped != NO_MAPPING)
+     {
+       struct datahead *found = __nscd_cache_search (INITGROUPS, user,
+-						    userlen, mapped);
++						    userlen, mapped,
++						    sizeof initgr_resp);
+       if (found != NULL)
+ 	{
+ 	  respdata = (char *) (&found->data[0].initgrdata + 1);

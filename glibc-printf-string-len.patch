@@ -1,0 +1,22 @@
+2007-05-06  Ulrich Drepper  <drepper@redhat.com>
+
+	* stdio-common/vfprintf.c (process_string_arg): Optimize
+	ridiculous precision in wide char code printing multi-byte string.
+	Reported by Jim Meyering <jim@meyering.net>.
+
+--- libc/stdio-common/vfprintf.c	5 May 2007 04:41:35 -0000	1.138
++++ libc/stdio-common/vfprintf.c	7 May 2007 03:43:55 -0000	1.139
+@@ -1026,10 +1026,11 @@ vfprintf (FILE *s, const CHAR_T *format,
+ 	    const char *mbs = (const char *) string;			      \
+ 	    mbstate_t mbstate;						      \
+ 									      \
+-	    len = prec != -1 ? (size_t) prec : strlen (mbs);		      \
++	    len = prec != -1 ? __strnlen (mbs, (size_t) prec) : strlen (mbs); \
+ 									      \
+ 	    /* Allocate dynamically an array which definitely is long	      \
+-	       enough for the wide character version.  */		      \
++	       enough for the wide character version.  Each byte in the	      \
++	       multi-byte string can produce at most one wide character.  */  \
+ 	    if (__libc_use_alloca (len * sizeof (wchar_t)))		      \
+ 	      string = (CHAR_T *) alloca (len * sizeof (wchar_t));	      \
+ 	    else if ((string = (CHAR_T *) malloc (len * sizeof (wchar_t)))    \

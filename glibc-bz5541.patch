@@ -1,0 +1,18 @@
+2008-01-09  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #5541]
+	* sunrpc/rpc_thread.c (__rpc_thread_destroy): Also free xports and
+	pollfd structures.
+	Patch by André Cruz.
+
+--- libc/sunrpc/rpc_thread.c	4 May 2006 18:07:29 -0000	1.11
++++ libc/sunrpc/rpc_thread.c	9 Jan 2008 21:51:42 -0000	1.12
+@@ -29,6 +29,8 @@ __rpc_thread_destroy (void)
+ 		free (tvp->svcraw_private_s);
+ 		free (tvp->authdes_cache_s);
+ 		free (tvp->authdes_lru_s);
++		free (tvp->svc_xports_s);
++		free (tvp->svc_pollfd_s);
+ 		if (tvp != &__libc_tsd_RPC_VARS_mem)
+ 			free (tvp);
+ 		__libc_tsd_set (RPC_VARS, NULL);

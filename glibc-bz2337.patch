@@ -1,0 +1,244 @@
+2006-12-13  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #2337]
+	* libio/Makefile (tests): Add tst-setvbuf1.
+	* libio/tst-setvbuf1.c: New file.
+
+2006-12-08  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #2337]
+	* libio/genops.c (__uflow): Fix a typo.
+	* libio/wfiledoalloc.c (_IO_wfile_doallocate): Don't stat
+	nor set _IO_LINE_BUF bit here.  Size the wide buffer based on
+	the narrow buffer size.
+
+2006-11-24  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #2337]
+	* libio/libio.h (_IO_FLAGS2_USER_WBUF): Define.
+	* libio/wgenops.c (_IO_wsetb, _IO_wdefault_finish): Test and set
+	_IO_FLAGS2_USER_WBUF bit in _flags2 instead of _IO_USER_BUF bit
+	in _flags.
+	* libio/wstrops.c (_IO_wstr_overflow, enlarge_userbuf,
+	_IO_wstr_finish): Likewise.
+	* libio/wmemstream.c (open_wmemstream): Likewise.
+	* libio/fileops.c (_IO_new_file_close_it): Call _IO_set[bgp]
+	even for wide streams.
+
+--- libc/libio/Makefile	14 Aug 2006 22:12:27 -0000	1.86
++++ libc/libio/Makefile	13 Dec 2006 23:17:48 -0000	1.87
+@@ -57,7 +57,8 @@ tests = tst_swprintf tst_wprintf tst_sws
+ 	bug-ungetc2 bug-ftell bug-ungetc3 bug-ungetc4 tst-fopenloc2 \
+ 	tst-memstream1 tst-memstream2 \
+ 	tst-wmemstream1 tst-wmemstream2 \
+-	bug-memstream1 bug-wmemstream1
++	bug-memstream1 bug-wmemstream1 \
++	tst-setvbuf1
+ test-srcs = test-freopen
+ 
+ all: # Make this the default target; it will be defined in Rules.
+--- libc/libio/fileops.c	19 Jan 2006 00:38:35 -0000	1.110
++++ libc/libio/fileops.c	13 Dec 2006 23:16:54 -0000	1.111
+@@ -174,14 +174,8 @@ _IO_new_file_close_it (fp)
+   close_status = _IO_SYSCLOSE (fp);
+ 
+   /* Free buffer. */
+-  if (fp->_mode <= 0)
+-    {
+-      INTUSE(_IO_setb) (fp, NULL, NULL, 0);
+-      _IO_setg (fp, NULL, NULL, NULL);
+-      _IO_setp (fp, NULL, NULL);
+-    }
+ #if defined _LIBC || defined _GLIBCPP_USE_WCHAR_T
+-  else
++  if (fp->_mode > 0)
+     {
+       if (_IO_have_wbackup (fp))
+ 	INTUSE(_IO_free_wbackup_area) (fp);
+@@ -190,6 +184,9 @@ _IO_new_file_close_it (fp)
+       _IO_wsetp (fp, NULL, NULL);
+     }
+ #endif
++  INTUSE(_IO_setb) (fp, NULL, NULL, 0);
++  _IO_setg (fp, NULL, NULL, NULL);
++  _IO_setp (fp, NULL, NULL);
+ 
+   INTUSE(_IO_un_link) ((struct _IO_FILE_plus *) fp);
+   fp->_flags = _IO_MAGIC|CLOSED_FILEBUF_FLAGS;
+--- libc/libio/genops.c	1 Mar 2006 05:32:48 -0000	1.70
++++ libc/libio/genops.c	13 Dec 2006 23:17:03 -0000	1.71
+@@ -367,7 +367,7 @@ __uflow (fp)
+ #endif
+ 
+   if (fp->_mode == 0)
+-    _IO_fwide (fp, -11);
++    _IO_fwide (fp, -1);
+   if (_IO_in_put_mode (fp))
+     if (INTUSE(_IO_switch_to_get_mode) (fp) == EOF)
+       return EOF;
+--- libc/libio/libio.h	14 Jan 2006 12:09:46 -0000	1.64
++++ libc/libio/libio.h	13 Dec 2006 23:15:31 -0000	1.65
+@@ -142,6 +142,7 @@
+ #ifdef _LIBC
+ # define _IO_FLAGS2_FORTIFY 4
+ #endif
++#define _IO_FLAGS2_USER_WBUF 8
+ 
+ /* These are "formatting flags" matching the iostream fmtflags enum values. */
+ #define _IO_SKIPWS 01
+--- libc/libio/tst-setvbuf1.c	1 Jan 1970 00:00:00 -0000
++++ libc/libio/tst-setvbuf1.c	13 Dec 2006 23:17:38 -0000	1.1
+@@ -0,0 +1,39 @@
++/* Dereived from the test case in BZ #2337.  */
++#include <errno.h>
++#include <error.h>
++#include <fcntl.h>
++#include <locale.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <wchar.h>
++
++
++static char buf[512] __attribute__ ((aligned (4096)));
++
++
++static int
++do_test (void)
++{
++  setlocale (LC_ALL, "de_DE.UTF-8");
++
++  FILE *fp = fdopen (dup (STDOUT_FILENO), "a");
++  if (fp == NULL)
++    error (EXIT_FAILURE, errno, "fdopen(,\"a\")");
++
++  setvbuf (fp, buf, _IOFBF, sizeof (buf));
++
++  /* fwprintf to unbuffered stream.   */
++  fwprintf (fp, L"hello.\n");
++
++  fclose (fp);
++
++  /* touch my buffer */
++  buf[45] = 'a';
++
++  return 0;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/libio/wfiledoalloc.c	6 Jul 2002 06:35:54 -0000	1.6
++++ libc/libio/wfiledoalloc.c	13 Dec 2006 23:17:18 -0000	1.7
+@@ -85,35 +86,20 @@ _IO_wfile_doallocate (fp)
+      _IO_FILE *fp;
+ {
+   _IO_size_t size;
+-  int couldbetty;
+   wchar_t *p;
+-  struct _G_stat64 st;
+ 
+   /* Allocate room for the external buffer.  */
+   if (fp->_IO_buf_base == NULL)
+     INTUSE(_IO_file_doallocate) (fp);
+ 
+-  if (fp->_fileno < 0 || _IO_SYSSTAT (fp, &st) < 0)
+-    {
+-      couldbetty = 0;
+-      size = _IO_BUFSIZ;
+-#if 0
+-      /* do not try to optimise fseek() */
+-      fp->_flags |= __SNPT;
+-#endif
+-    }
+-  else
+-    {
+-      couldbetty = S_ISCHR (st.st_mode);
+-#if _IO_HAVE_ST_BLKSIZE
+-      size = st.st_blksize <= 0 ? _IO_BUFSIZ : st.st_blksize;
+-#else
+-      size = _IO_BUFSIZ;
+-#endif
+-    }
++  /* If narrow buffer is user allocated (set by setvbuf etc.),
++     use that size as the size of the wide buffer, when it is
++     allocated by _IO_file_doallocate, multiply that by size
++     of the wide character.  */
++  size = fp->_IO_buf_end - fp->_IO_buf_base;
++  if ((fp->_flags & _IO_USER_BUF))
++    size = (size + sizeof (wchar_t) - 1) / sizeof (wchar_t);
+   ALLOC_WBUF (p, size * sizeof (wchar_t), EOF);
+   INTUSE(_IO_wsetb) (fp, p, p + size, 1);
+-  if (couldbetty && isatty (fp->_fileno))
+-    fp->_flags |= _IO_LINE_BUF;
+   return 1;
+ }
+--- libc/libio/wgenops.c	12 Feb 2006 21:20:57 -0000	1.14
++++ libc/libio/wgenops.c	13 Dec 2006 23:15:51 -0000	1.15
+@@ -115,14 +115,14 @@ _IO_wsetb (f, b, eb, a)
+      wchar_t *eb;
+      int a;
+ {
+-  if (f->_wide_data->_IO_buf_base && !(f->_flags & _IO_USER_BUF))
++  if (f->_wide_data->_IO_buf_base && !(f->_flags2 & _IO_FLAGS2_USER_WBUF))
+     FREE_BUF (f->_wide_data->_IO_buf_base, _IO_wblen (f) * sizeof (wchar_t));
+   f->_wide_data->_IO_buf_base = b;
+   f->_wide_data->_IO_buf_end = eb;
+   if (a)
+-    f->_flags &= ~_IO_USER_BUF;
++    f->_flags2 &= ~_IO_FLAGS2_USER_WBUF;
+   else
+-    f->_flags |= _IO_USER_BUF;
++    f->_flags2 |= _IO_FLAGS2_USER_WBUF;
+ }
+ INTDEF(_IO_wsetb)
+ 
+@@ -198,7 +198,7 @@ _IO_wdefault_finish (fp, dummy)
+      int dummy;
+ {
+   struct _IO_marker *mark;
+-  if (fp->_wide_data->_IO_buf_base && !(fp->_flags & _IO_USER_BUF))
++  if (fp->_wide_data->_IO_buf_base && !(fp->_flags2 & _IO_FLAGS2_USER_WBUF))
+     {
+       FREE_BUF (fp->_wide_data->_IO_buf_base,
+ 		_IO_wblen (fp) * sizeof (wchar_t));
+--- libc/libio/wmemstream.c	30 Sep 2006 00:06:33 -0000	1.3
++++ libc/libio/wmemstream.c	13 Dec 2006 23:16:40 -0000	1.4
+@@ -92,7 +92,7 @@ open_wmemstream (bufloc, sizeloc)
+   _IO_fwide (&new_f->fp._sf._sbf._f, 1);
+   _IO_wstr_init_static (&new_f->fp._sf._sbf._f, buf,
+ 			_IO_BUFSIZ / sizeof (wchar_t), buf);
+-  new_f->fp._sf._sbf._f._flags &= ~_IO_USER_BUF;
++  new_f->fp._sf._sbf._f._flags2 &= ~_IO_FLAGS2_USER_WBUF;
+   new_f->fp._sf._s._allocate_buffer = (_IO_alloc_type) malloc;
+   new_f->fp._sf._s._free_buffer = (_IO_free_type) free;
+ 
+--- libc/libio/wstrops.c	14 Aug 2006 22:14:53 -0000	1.11
++++ libc/libio/wstrops.c	13 Dec 2006 23:16:21 -0000	1.12
+@@ -88,7 +88,7 @@ _IO_wstr_overflow (fp, c)
+   pos = fp->_wide_data->_IO_write_ptr - fp->_wide_data->_IO_write_base;
+   if (pos >= (_IO_size_t) (_IO_wblen (fp) + flush_only))
+     {
+-      if (fp->_flags & _IO_USER_BUF) /* not allowed to enlarge */
++      if (fp->_flags2 & _IO_FLAGS2_USER_WBUF) /* not allowed to enlarge */
+ 	return WEOF;
+       else
+ 	{
+@@ -182,7 +182,7 @@ enlarge_userbuf (_IO_FILE *fp, _IO_off64
+   _IO_ssize_t oldend = wd->_IO_write_end - wd->_IO_write_base;
+ 
+   /* Try to enlarge the buffer.  */
+-  if (fp->_flags & _IO_USER_BUF)
++  if (fp->_flags2 & _IO_FLAGS2_USER_WBUF)
+     /* User-provided buffer.  */
+     return 1;
+ 
+@@ -335,7 +335,7 @@ _IO_wstr_finish (fp, dummy)
+      _IO_FILE *fp;
+      int dummy;
+ {
+-  if (fp->_wide_data->_IO_buf_base && !(fp->_flags & _IO_USER_BUF))
++  if (fp->_wide_data->_IO_buf_base && !(fp->_flags2 & _IO_FLAGS2_USER_WBUF))
+     (((_IO_strfile *) fp)->_s._free_buffer) (fp->_wide_data->_IO_buf_base);
+   fp->_wide_data->_IO_buf_base = NULL;
+ 

@@ -1,0 +1,30 @@
+2007-02-17  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #3842]
+	* sysdeps/posix/euidaccess.c [_LIBC] (euidaccess): Remove shortcut
+	using __libc_enable_secure.
+
+--- libc/sysdeps/posix/euidaccess.c	6 Jan 2006 11:21:57 -0000	1.13
++++ libc/sysdeps/posix/euidaccess.c	17 Feb 2007 18:12:29 -0000	1.14
+@@ -128,10 +128,6 @@ euidaccess (path, mode)
+ #ifdef	_LIBC
+   uid_t euid;
+   gid_t egid;
+-
+-  if (! __libc_enable_secure)
+-    /* If we are not set-uid or set-gid, access does the same.  */
+-    return __access (path, mode);
+ #else
+   if (have_ids == 0)
+     {
+@@ -162,6 +158,10 @@ euidaccess (path, mode)
+   /* Now we need the IDs.  */
+   euid = __geteuid ();
+   egid = __getegid ();
++
++  if (__getuid () == euid && __getgid () == egid)
++    /* If we are not set-uid or set-gid, access does the same.  */
++    return __access (path, mode);
+ #endif
+ 
+   /* The super-user can read and write any file, and execute any file

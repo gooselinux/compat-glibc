@@ -1,0 +1,113 @@
+2008-11-01  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #6955]
+	* pthread_mutex_lock.c: Add support for private PI mutexes.
+	* pthread_mutex_timedlock.c: Likewise.
+	* pthread_mutex_trylock.c: Likewise.
+	* pthread_mutex_unlock.c: Likewise.
+	Patch mostly by Ben Jackson <ben@ben.com>.
+
+--- libc/nptl/pthread_mutex_lock.c	11 Aug 2007 18:46:53 -0000	1.20
++++ libc/nptl/pthread_mutex_lock.c	1 Nov 2008 19:49:08 -0000	1.21
+@@ -269,9 +269,13 @@ __pthread_mutex_lock (mutex)
+ 	  {
+ 	    /* The mutex is locked.  The kernel will now take care of
+ 	       everything.  */
++	    int private = (robust
++			   ? PTHREAD_ROBUST_MUTEX_PSHARED (mutex)
++			   : PTHREAD_MUTEX_PSHARED (mutex));
+ 	    INTERNAL_SYSCALL_DECL (__err);
+ 	    int e = INTERNAL_SYSCALL (futex, __err, 4, &mutex->__data.__lock,
+-				      FUTEX_LOCK_PI, 1, 0);
++				      __lll_private_flag (FUTEX_LOCK_PI,
++							  private), 1, 0);
+ 
+ 	    if (INTERNAL_SYSCALL_ERROR_P (e, __err)
+ 		&& (INTERNAL_SYSCALL_ERRNO (e, __err) == ESRCH
+@@ -327,7 +331,10 @@ __pthread_mutex_lock (mutex)
+ 
+ 	    INTERNAL_SYSCALL_DECL (__err);
+ 	    INTERNAL_SYSCALL (futex, __err, 4, &mutex->__data.__lock,
+-			      FUTEX_UNLOCK_PI, 0, 0);
++			      __lll_private_flag (FUTEX_UNLOCK_PI,
++						  PTHREAD_ROBUST_MUTEX_PSHARED (mutex)
++),
++			      0, 0);
+ 
+ 	    THREAD_SETMEM (THREAD_SELF, robust_head.list_op_pending, NULL);
+ 	    return ENOTRECOVERABLE;
+--- libc/nptl/pthread_mutex_timedlock.c	11 Aug 2007 18:42:56 -0000	1.16
++++ libc/nptl/pthread_mutex_timedlock.c	1 Nov 2008 19:47:04 -0000	1.17
+@@ -254,10 +254,15 @@ pthread_mutex_timedlock (mutex, abstime)
+ 	    /* The mutex is locked.  The kernel will now take care of
+ 	       everything.  The timeout value must be a relative value.
+ 	       Convert it.  */
++	    int private = (robust
++			   ? PTHREAD_ROBUST_MUTEX_PSHARED (mutex)
++			   : PTHREAD_MUTEX_PSHARED (mutex));
+ 	    INTERNAL_SYSCALL_DECL (__err);
+ 
+ 	    int e = INTERNAL_SYSCALL (futex, __err, 4, &mutex->__data.__lock,
+-				      FUTEX_LOCK_PI, 1, abstime);
++				      __lll_private_flag (FUTEX_LOCK_PI,
++							  private), 1,
++				      abstime);
+ 	    if (INTERNAL_SYSCALL_ERROR_P (e, __err))
+ 	      {
+ 		if (INTERNAL_SYSCALL_ERRNO (e, __err) == ETIMEDOUT)
+@@ -331,7 +336,9 @@ pthread_mutex_timedlock (mutex, abstime)
+ 
+ 	    INTERNAL_SYSCALL_DECL (__err);
+ 	    INTERNAL_SYSCALL (futex, __err, 4, &mutex->__data.__lock,
+-			      FUTEX_UNLOCK_PI, 0, 0);
++			      __lll_private_flag (FUTEX_UNLOCK_PI,
++						  PTHREAD_ROBUST_MUTEX_PSHARED (mutex)),
++			      0, 0);
+ 
+ 	    THREAD_SETMEM (THREAD_SELF, robust_head.list_op_pending, NULL);
+ 	    return ENOTRECOVERABLE;
+--- libc/nptl/pthread_mutex_trylock.c	11 Aug 2007 18:47:09 -0000	1.17
++++ libc/nptl/pthread_mutex_trylock.c	1 Nov 2008 19:44:53 -0000	1.18
+@@ -231,9 +231,13 @@ __pthread_mutex_trylock (mutex)
+ 
+ 	    /* The mutex owner died.  The kernel will now take care of
+ 	       everything.  */
++	    int private = (robust
++			   ? PTHREAD_ROBUST_MUTEX_PSHARED (mutex)
++			   : PTHREAD_MUTEX_PSHARED (mutex));
+ 	    INTERNAL_SYSCALL_DECL (__err);
+ 	    int e = INTERNAL_SYSCALL (futex, __err, 4, &mutex->__data.__lock,
+-				      FUTEX_TRYLOCK_PI, 0, 0);
++				      __lll_private_flag (FUTEX_TRYLOCK_PI,
++							  private), 0, 0);
+ 
+ 	    if (INTERNAL_SYSCALL_ERROR_P (e, __err)
+ 		&& INTERNAL_SYSCALL_ERRNO (e, __err) == EWOULDBLOCK)
+@@ -274,7 +278,9 @@ __pthread_mutex_trylock (mutex)
+ 
+ 	    INTERNAL_SYSCALL_DECL (__err);
+ 	    INTERNAL_SYSCALL (futex, __err, 4, &mutex->__data.__lock,
+-			      FUTEX_UNLOCK_PI, 0, 0);
++			      __lll_private_flag (FUTEX_UNLOCK_PI,
++						  PTHREAD_ROBUST_MUTEX_PSHARED (mutex)),
++			      0, 0);
+ 
+ 	    THREAD_SETMEM (THREAD_SELF, robust_head.list_op_pending, NULL);
+ 	    return ENOTRECOVERABLE;
+--- libc/nptl/pthread_mutex_unlock.c	11 Aug 2007 18:43:23 -0000	1.18
++++ libc/nptl/pthread_mutex_unlock.c	1 Nov 2008 19:42:36 -0000	1.19
+@@ -196,9 +196,13 @@ __pthread_mutex_unlock_usercnt (mutex, d
+ 						   THREAD_GETMEM (THREAD_SELF,
+ 								  tid)))
+ 	{
++	  int robust = mutex->__data.__kind & PTHREAD_MUTEX_ROBUST_NORMAL_NP;
++	  int private = (robust
++			 ? PTHREAD_ROBUST_MUTEX_PSHARED (mutex)
++			 : PTHREAD_MUTEX_PSHARED (mutex));
+ 	  INTERNAL_SYSCALL_DECL (__err);
+ 	  INTERNAL_SYSCALL (futex, __err, 2, &mutex->__data.__lock,
+-			    FUTEX_UNLOCK_PI);
++			    __lll_private_flag (FUTEX_UNLOCK_PI, private));
+ 	}
+ 
+       THREAD_SETMEM (THREAD_SELF, robust_head.list_op_pending, NULL);

@@ -1,0 +1,105 @@
+2007-12-17  Roland McGrath  <roland@redhat.com>
+
+	* inet/ether_line.c (ether_line): Remove unused variable.
+
+2007-12-07  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #5454]
+	* inet/ether_line.c: Strip hostname of whitespaces.
+	* inet/Makefile (tests): Add tst-ether_line.
+	* inet/tst-ether_line.c: New file.
+
+--- libc/inet/ether_line.c	24 May 2002 08:20:58 -0000	1.6
++++ libc/inet/ether_line.c	17 Dec 2007 21:22:02 -0000	1.8
+@@ -26,10 +26,7 @@
+ int
+ ether_line (const char *line, struct ether_addr *addr, char *hostname)
+ {
+-  size_t cnt;
+-  char *cp;
+-
+-  for (cnt = 0; cnt < 6; ++cnt)
++  for (size_t cnt = 0; cnt < 6; ++cnt)
+     {
+       unsigned int number;
+       char ch;
+@@ -61,19 +58,20 @@ ether_line (const char *line, struct eth
+ 	++line;
+     }
+ 
+-  /* Remove trailing white space.  */
+-  cp = __strchrnul (line, '#');
+-  while (cp > line && isspace (cp[-1]))
+-    --cp;
++  /* Skip initial whitespace.  */
++  while (isspace (*line))
++    ++line;
+ 
+-  if (cp == line)
++  if (*line == '#' || *line == '\0')
+     /* No hostname.  */
+     return -1;
+ 
++  /* The hostname is up to the next non-space character.  */
+   /* XXX This can cause trouble because the hostname might be too long
+      but we have no possibility to check it here.  */
+-  memcpy (hostname, line, cp - line);
+-  hostname [cp - line] = '\0';
++  while (*line != '\0' && *line != '#' && !isspace (*line))
++    *hostname++ = *line++;
++  *hostname = '\0';
+ 
+   return 0;
+ }
+--- libc/inet/Makefile	14 Nov 2007 06:57:43 -0000	1.62
++++ libc/inet/Makefile	7 Dec 2007 16:33:46 -0000	1.63
+@@ -52,7 +52,7 @@ routines := htonl htons		\
+ aux := check_pf ifreq
+ 
+ tests := htontest test_ifindex tst-ntoa tst-ether_aton tst-network \
+-	 tst-gethnm test-ifaddrs bug-if1 test-inet6_opt
++	 tst-gethnm test-ifaddrs bug-if1 test-inet6_opt tst-ether_line
+ 
+ include ../Rules
+ 
+--- libc/inet/tst-ether_line.c	1 Jan 1970 00:00:00 -0000
++++ libc/inet/tst-ether_line.c	7 Dec 2007 16:32:44 -0000	1.1
+@@ -0,0 +1,38 @@
++#include <stdio.h>
++#include <string.h>
++#include <netinet/ether.h>
++
++
++static int
++do_test (void)
++{
++  struct ether_addr a;
++  char buf[1000];
++  if (ether_line ("00:01:02:03:04:05       aaaaa   \n", &a, buf) != 0)
++    {
++      puts ("ether_line failed");
++      return 1;
++    }
++
++  int res = 0;
++  int i;
++  for (i = 0; i < ETH_ALEN; ++i)
++    {
++      printf ("%02x%s",
++	      (int) a.ether_addr_octet[i], i + 1 == ETH_ALEN ? "" : ":");
++      if (a.ether_addr_octet[i] != i)
++	{
++	  printf ("octet %d is %d, expected %d\n",
++		  i, (int) a.ether_addr_octet[i], i);
++	  res = 1;
++	}
++    }
++
++  printf (" \"%s\"\n", buf);
++  res |= strcmp (buf, "aaaaa") != 0;
++
++  return res;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"

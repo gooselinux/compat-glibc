@@ -1,0 +1,68 @@
+2008-07-08  Ulrich Drepper  <drepper@redhat.com>
+
+	* stdio-common/Makefile: Add rules to build and run tst-setvbuf1.
+	* stdio-common/tst-setvbuf1.c: New file.
+	* stdio-common/tst-setvbuf1.expect: New file.
+
+	[BZ #6719]
+	* libio/iosetvbuf.c (_IO_setvbuf): Correctly clear buffering flags
+	when selecting fully-buffered stream.
+	Patch by Wang Xin <wxinee@gmail.com>.
+
+--- libc/libio/iosetvbuf.c	29 Aug 2003 19:58:27 -0000	1.20
++++ libc/libio/iosetvbuf.c	8 Jul 2008 16:20:32 -0000	1.21
+@@ -45,7 +45,7 @@ _IO_setvbuf (fp, buf, mode, size)
+   switch (mode)
+     {
+     case _IOFBF:
+-      fp->_IO_file_flags &= ~_IO_LINE_BUF|_IO_UNBUFFERED;
++      fp->_IO_file_flags &= ~(_IO_LINE_BUF|_IO_UNBUFFERED);
+       if (buf == NULL)
+ 	{
+ 	  if (fp->_IO_buf_base == NULL)
+--- libc/stdio-common/Makefile	24 May 2008 18:14:36 -0000	1.112
++++ libc/stdio-common/Makefile	8 Jul 2008 16:32:28 -0000	1.113
+@@ -55,7 +55,7 @@ tests := tstscanf test_rdwr test-popen t
+ 	 tst-perror tst-sprintf tst-rndseek tst-fdopen tst-fphex bug14 bug15 \
+ 	 tst-popen tst-unlockedio tst-fmemopen2 tst-put-error tst-fgets \
+ 	 tst-fwrite bug16 bug17 tst-sprintf2 bug18 bug18a bug19 bug19a \
+-	 tst-popen2 bug20 bug22
++	 tst-popen2 bug20 bug22 tst-setvbuf1
+ 
+ test-srcs = tst-unbputc tst-printf
+ 
+@@ -102,3 +102,7 @@ bug15-ENV = LOCPATH=$(common-objpfx)loca
+ ifneq (,$(filter %REENTRANT, $(defines)))
+ CPPFLAGS += -D_IO_MTSAFE_IO
+ endif
++
++$(objpfx)tst-setvbuf1.out: tst-setvbuf1.expect $(objpfx)tst-setvbuf1
++	$(built-program-cmd) > $@ 2>&1
++	cmp tst-setvbuf1.expect $@
+--- libc/stdio-common/tst-setvbuf1.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdio-common/tst-setvbuf1.c	8 Jul 2008 16:32:02 -0000	1.1
+@@ -0,0 +1,19 @@
++#include <stdio.h>
++
++static int
++do_test (void)
++{
++  if (setvbuf (stderr, NULL, _IOFBF, BUFSIZ) != 0)
++    {
++      puts ("Set full buffer error.");
++      return 1;
++    }
++
++  fprintf (stderr, "Output #1 <stderr>.\n");
++  printf ("Output #2 <stdout>.\n");
++
++  return 0;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/stdio-common/tst-setvbuf1.expect	1 Jan 1970 00:00:00 -0000
++++ libc/stdio-common/tst-setvbuf1.expect	8 Jul 2008 16:32:14 -0000	1.1
+@@ -0,0 +1,2 @@
++Output #2 <stdout>.
++Output #1 <stderr>.

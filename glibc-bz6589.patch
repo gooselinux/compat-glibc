@@ -1,0 +1,46 @@
+2009-04-29  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/unix/sysv/linux/ifaddrs.c: Revert unintended 2008-08-12
+	comment change.
+
+2008-08-12  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #6589]
+	* sysdeps/unix/sysv/linux/ifaddrs.c (struct sockaddr_ll_max):
+	Define.
+	(struct ifaddrs_storage): Use it instead of sockaddr_ll.
+
+--- libc/sysdeps/unix/sysv/linux/ifaddrs.c	13 Aug 2007 18:33:02 -0000	1.20
++++ libc/sysdeps/unix/sysv/linux/ifaddrs.c	29 Apr 2009 06:55:42 -0000	1.22
+@@ -49,6 +49,22 @@ int __no_netlink_support attribute_hidde
+ #endif
+ 
+ 
++/* There is a problem with this type.  The address length for
++   Infiniband sockets is much longer than the 8 bytes allocated in the
++   sockaddr_ll definition.  Hence we use here a special
++   definition.  */
++struct sockaddr_ll_max
++  {
++    unsigned short int sll_family;
++    unsigned short int sll_protocol;
++    int sll_ifindex;
++    unsigned short int sll_hatype;
++    unsigned char sll_pkttype;
++    unsigned char sll_halen;
++    unsigned char sll_addr[24];
++  };
++
++
+ /* struct to hold the data for one ifaddrs entry, so we can allocate
+    everything at once.  */
+ struct ifaddrs_storage
+@@ -59,7 +75,7 @@ struct ifaddrs_storage
+     /* Save space for the biggest of the four used sockaddr types and
+        avoid a lot of casts.  */
+     struct sockaddr sa;
+-    struct sockaddr_ll sl;
++    struct sockaddr_ll_max sl;
+     struct sockaddr_in s4;
+     struct sockaddr_in6 s6;
+   } addr, netmask, broadaddr;

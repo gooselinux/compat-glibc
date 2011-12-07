@@ -1,0 +1,407 @@
+2007-06-19  Ulrich Drepper  <drepper@redhat.com>
+
+	* elf/dl-close.c (free_mem): Free _dl_scope_free_list.
+
+2007-06-13  Jakub Jelinek  <jakub@redhat.com>
+
+	* include/link.h: Don't include rtld-lowlevel.h.
+	(struct link_map): Remove l_scope_lock.
+	* sysdeps/generic/ldsodefs.h: Don't include rtld-lowlevel.h.
+	(_dl_scope_free_list): New field (variable) in _rtld_global.
+	(DL_LOOKUP_SCOPE_LOCK): Remove.
+	(_dl_scope_free): New prototype.
+	* elf/dl-runtime.c (_dl_fixup): Don't use __rtld_mrlock_*lock.
+	Don't pass DL_LOOKUP_SCOPE_LOCK to _dl_lookup_symbol_x.
+	(_dl_profile_fixup): Likewise.
+	* elf/dl-sym.c (do_sym): Likewise.  Use wrapped _dl_lookup_symbol_x
+	whenever !RTLD_SINGLE_THREAD_P, use THREAD_GSCOPE_SET_FLAG and
+	THREAD_GSCOPE_RESET_FLAG around it.
+	* elf/dl-close.c (_dl_close_worker): Don't use
+	__rtld_mrlock_{change,done}.  Call _dl_scope_free on the old
+	scope.  Make sure THREAD_GSCOPE_WAIT () happens if any old
+	scopes were queued or if l_scope_mem has been abandoned.
+	* elf/dl-open.c (_dl_scope_free): New function.
+	(dl_open_worker): Use it.  Don't use __rtld_mrlock_{change,done}.
+	* elf/dl-support.c (_dl_scope_free_list): New variable.
+	* elf/dl-lookup.c (add_dependency): Remove flags argument.
+	Remove DL_LOOKUP_SCOPE_LOCK handling.
+	(_dl_lookup_symbol_x): Adjust caller.  Remove DL_LOOKUP_SCOPE_LOCK
+	handling.
+	* elf/dl-object.c (_dl_new_object): Don't use
+	__rtld_mrlock_initialize.
+
+--- libc/elf/dl-object.c.jj	2006-10-31 23:08:30.000000000 +0100
++++ libc/elf/dl-object.c	2007-06-12 15:51:44.000000000 +0200
+@@ -85,11 +85,6 @@ _dl_new_object (char *realname, const ch
+   new->l_scope = new->l_scope_mem;
+   new->l_scope_max = sizeof (new->l_scope_mem) / sizeof (new->l_scope_mem[0]);
+ 
+-  /* No need to initialize the scope lock if the initializer is zero.  */
+-#if _RTLD_MRLOCK_INITIALIZER != 0
+-  __rtld_mrlock_initialize (new->l_scope_lock);
+-#endif
+-
+   /* Counter for the scopes we have to handle.  */
+   idx = 0;
+ 
+--- libc/elf/dl-runtime.c.jj	2007-06-07 16:20:58.000000000 +0200
++++ libc/elf/dl-runtime.c	2007-06-12 15:51:44.000000000 +0200
+@@ -100,22 +100,11 @@ _dl_fixup (
+ 	 we are not using any threads (yet).  */
+       int flags = DL_LOOKUP_ADD_DEPENDENCY;
+       if (!RTLD_SINGLE_THREAD_P)
+-	{
+-	  THREAD_GSCOPE_SET_FLAG ();
+-
+-	  if (l->l_type == lt_loaded)
+-	    {
+-	      __rtld_mrlock_lock (l->l_scope_lock);
+-	      flags |= DL_LOOKUP_SCOPE_LOCK;
+-	    }
+-	}
++	THREAD_GSCOPE_SET_FLAG ();
+ 
+       result = _dl_lookup_symbol_x (strtab + sym->st_name, l, &sym, l->l_scope,
+ 				    version, ELF_RTYPE_CLASS_PLT, flags, NULL);
+ 
+-      if ((flags & DL_LOOKUP_SCOPE_LOCK) != 0)
+-	__rtld_mrlock_unlock (l->l_scope_lock);
+-
+       /* We are done with the global scope.  */
+       if (!RTLD_SINGLE_THREAD_P)
+ 	THREAD_GSCOPE_RESET_FLAG ();
+@@ -203,23 +192,12 @@ _dl_profile_fixup (
+ 	     we are not using any threads (yet).  */
+ 	  int flags = DL_LOOKUP_ADD_DEPENDENCY;
+ 	  if (!RTLD_SINGLE_THREAD_P)
+-	    {
+-	      THREAD_GSCOPE_SET_FLAG ();
+-
+-	      if (l->l_type == lt_loaded)
+-		{
+-		  __rtld_mrlock_lock (l->l_scope_lock);
+-		  flags |= DL_LOOKUP_SCOPE_LOCK;
+-		}
+-	    }
++	    THREAD_GSCOPE_SET_FLAG ();
+ 
+ 	  result = _dl_lookup_symbol_x (strtab + refsym->st_name, l,
+ 					&defsym, l->l_scope, version,
+ 					ELF_RTYPE_CLASS_PLT, flags, NULL);
+ 
+-	  if ((flags & DL_LOOKUP_SCOPE_LOCK) != 0)
+-	    __rtld_mrlock_unlock (l->l_scope_lock);
+-
+ 	  /* We are done with the global scope.  */
+ 	  if (!RTLD_SINGLE_THREAD_P)
+ 	    THREAD_GSCOPE_RESET_FLAG ();
+--- libc/elf/dl-support.c.jj	2007-05-21 23:33:49.000000000 +0200
++++ libc/elf/dl-support.c	2007-06-12 15:51:44.000000000 +0200
+@@ -135,6 +135,8 @@ int (*_dl_make_stack_executable_hook) (v
+ /* Function in libpthread to wait for termination of lookups.  */
+ void (*_dl_wait_lookup_done) (void);
+ 
++struct dl_scope_free_list *_dl_scope_free_list;
++
+ #ifdef NEED_DL_SYSINFO
+ /* Needed for improved syscall handling on at least x86/Linux.  */
+ uintptr_t _dl_sysinfo = DL_SYSINFO_DEFAULT;
+--- libc/elf/dl-lookup.c.jj	2007-06-12 14:08:14.000000000 +0200
++++ libc/elf/dl-lookup.c	2007-06-12 15:51:44.000000000 +0200
+@@ -86,7 +86,7 @@ dl_new_hash (const char *s)
+ /* Add extra dependency on MAP to UNDEF_MAP.  */
+ static int
+ internal_function
+-add_dependency (struct link_map *undef_map, struct link_map *map, int flags)
++add_dependency (struct link_map *undef_map, struct link_map *map)
+ {
+   struct link_map **list;
+   struct link_map *runp;
+@@ -99,18 +99,8 @@ add_dependency (struct link_map *undef_m
+   if (undef_map == map)
+     return 0;
+ 
+-  /* Make sure nobody can unload the object while we are at it.
+-     If we hold a scope lock drop it now to avoid ABBA locking problems.  */
+-  if ((flags & DL_LOOKUP_SCOPE_LOCK) != 0 && !RTLD_SINGLE_THREAD_P)
+-    {
+-      __rtld_mrlock_unlock (undef_map->l_scope_lock);
+-
+-      __rtld_lock_lock_recursive (GL(dl_load_lock));
+-
+-      __rtld_mrlock_lock (undef_map->l_scope_lock);
+-    }
+-  else
+-    __rtld_lock_lock_recursive (GL(dl_load_lock));
++  /* Make sure nobody can unload the object while we are at it.  */
++  __rtld_lock_lock_recursive (GL(dl_load_lock));
+ 
+   /* Avoid references to objects which cannot be unloaded anyway.  */
+   if (map->l_type != lt_loaded
+@@ -237,10 +227,9 @@ _dl_lookup_symbol_x (const char *undef_n
+ 
+   bump_num_relocations ();
+ 
+-  /* No other flag than DL_LOOKUP_ADD_DEPENDENCY and DL_LOOKUP_SCOPE_LOCK
+-     is allowed if we look up a versioned symbol.  */
+-  assert (version == NULL || (flags & ~(DL_LOOKUP_ADD_DEPENDENCY
+-					| DL_LOOKUP_SCOPE_LOCK)) == 0);
++  /* No other flag than DL_LOOKUP_ADD_DEPENDENCY is allowed if we look
++     up a versioned symbol.  */
++  assert (version == NULL || (flags & ~(DL_LOOKUP_ADD_DEPENDENCY)) == 0);
+ 
+   size_t i = 0;
+   if (__builtin_expect (skip_map != NULL, 0))
+@@ -346,13 +335,11 @@ _dl_lookup_symbol_x (const char *undef_n
+ 	 runtime lookups.  */
+       && (flags & DL_LOOKUP_ADD_DEPENDENCY) != 0
+       /* Add UNDEF_MAP to the dependencies.  */
+-      && add_dependency (undef_map, current_value.m, flags) < 0)
++      && add_dependency (undef_map, current_value.m) < 0)
+       /* Something went wrong.  Perhaps the object we tried to reference
+ 	 was just removed.  Try finding another definition.  */
+-      return _dl_lookup_symbol_x (undef_name, undef_map, ref,
+-				  (flags & DL_LOOKUP_SCOPE_LOCK) == 0
+-				  ? symbol_scope : undef_map->l_scope, version,
+-				  type_class, flags, skip_map);
++      return _dl_lookup_symbol_x (undef_name, undef_map, ref, symbol_scope,
++				  version, type_class, flags, skip_map);
+ 
+   /* The object is used.  */
+   current_value.m->l_used = 1;
+--- libc/elf/dl-sym.c.jj	2007-05-21 23:33:49.000000000 +0200
++++ libc/elf/dl-sym.c	2007-06-12 15:51:44.000000000 +0200
+@@ -113,29 +113,29 @@ do_sym (void *handle, const char *name, 
+ 	 the initial binary.  And then the more complex part
+ 	 where the object is dynamically loaded and the scope
+ 	 array can change.  */
+-      if (match->l_type != lt_loaded || RTLD_SINGLE_THREAD_P)
++      if (RTLD_SINGLE_THREAD_P)
+ 	result = GLRO(dl_lookup_symbol_x) (name, match, &ref,
+ 					   match->l_scope, vers, 0,
+ 					   flags | DL_LOOKUP_ADD_DEPENDENCY,
+ 					   NULL);
+       else
+ 	{
+-	  __rtld_mrlock_lock (match->l_scope_lock);
+-
+ 	  struct call_dl_lookup_args args;
+ 	  args.name = name;
+ 	  args.map = match;
+ 	  args.vers = vers;
+-	  args.flags = flags | DL_LOOKUP_ADD_DEPENDENCY | DL_LOOKUP_SCOPE_LOCK;
++	  args.flags = flags | DL_LOOKUP_ADD_DEPENDENCY;
+ 	  args.refp = &ref;
+ 
++	  THREAD_GSCOPE_SET_FLAG ();
++
+ 	  const char *objname;
+ 	  const char *errstring = NULL;
+ 	  bool malloced;
+ 	  int err = GLRO(dl_catch_error) (&objname, &errstring, &malloced,
+ 					  call_dl_lookup, &args);
+ 
+-	  __rtld_mrlock_unlock (match->l_scope_lock);
++	  THREAD_GSCOPE_RESET_FLAG ();
+ 
+ 	  if (__builtin_expect (errstring != NULL, 0))
+ 	    {
+--- libc/elf/dl-close.c.jj	2007-06-12 14:08:14.000000000 +0200
++++ libc/elf/dl-close.c	2007-06-13 13:12:00.000000000 +0200
+@@ -233,6 +233,7 @@ _dl_close_worker (struct link_map *map)
+   bool do_audit = GLRO(dl_naudit) > 0 && !ns->_ns_loaded->l_auditing;
+ #endif
+   bool unload_any = false;
++  bool scope_mem_left = false;
+   unsigned int unload_global = 0;
+   unsigned int first_loaded = ~0;
+   for (unsigned int i = 0; i < nloaded; ++i)
+@@ -409,18 +410,18 @@ _dl_close_worker (struct link_map *map)
+ 
+ 	      struct r_scope_elem **old = imap->l_scope;
+ 
+-	      if (RTLD_SINGLE_THREAD_P)
+-		imap->l_scope = newp;
+-	      else
+-		{
+-		  __rtld_mrlock_change (imap->l_scope_lock);
+-		  imap->l_scope = newp;
+-		  __rtld_mrlock_done (imap->l_scope_lock);
+-		}
++	      imap->l_scope = newp;
+ 
+ 	      /* No user anymore, we can free it now.  */
+ 	      if (old != imap->l_scope_mem)
+-		free (old);
++		{
++		  if (_dl_scope_free (old))
++		    /* If _dl_scope_free used THREAD_GSCOPE_WAIT (),
++		       no need to repeat it.  */
++		    scope_mem_left = false;
++		}
++	      else
++		scope_mem_left = true;
+ 
+ 	      imap->l_scope_max = new_size;
+ 	    }
+@@ -489,9 +490,21 @@ _dl_close_worker (struct link_map *map)
+ 	      j++;
+ 	    }
+       ns_msl->r_nlist = j;
++    }
+ 
+-      if (!RTLD_SINGLE_THREAD_P)
+-	THREAD_GSCOPE_WAIT ();
++  if (!RTLD_SINGLE_THREAD_P
++      && (unload_global
++	  || scope_mem_left
++	  || (GL(dl_scope_free_list) != NULL
++	      && GL(dl_scope_free_list)->count)))
++    {
++      struct dl_scope_free_list *fsl;
++
++      THREAD_GSCOPE_WAIT ();
++      /* Now we can free any queued old scopes.  */
++      if ((fsl = GL(dl_scope_free_list)) != NULL)
++	while (fsl->count > 0)
++	  free (fsl->list[--fsl->count]);
+     }
+ 
+ #ifdef USE_TLS
+@@ -800,4 +813,8 @@ libc_freeres_fn (free_mem)
+ 	free_slotinfo (&GL(dl_tls_dtv_slotinfo_list)->next);
+     }
+ #endif
++
++  void *scope_free_list = GL(dl_scope_free_list);
++  GL(dl_scope_free_list) = NULL;
++  free (scope_free_list);
+ }
+--- libc/elf/dl-open.c.jj	2007-05-21 23:33:49.000000000 +0200
++++ libc/elf/dl-open.c	2007-06-13 13:12:10.000000000 +0200
+@@ -165,6 +165,40 @@ add_to_global (struct link_map *new)
+   return 0;
+ }
+ 
++int
++_dl_scope_free (struct r_scope_elem **old)
++{
++  struct dl_scope_free_list *fsl;
++#define DL_SCOPE_FREE_LIST_SIZE (sizeof (fsl->list) / sizeof (fsl->list[0]))
++
++  if (RTLD_SINGLE_THREAD_P)
++    free (old);
++  else if ((fsl = GL(dl_scope_free_list)) == NULL)
++    {
++      GL(dl_scope_free_list) = fsl = malloc (sizeof (*fsl));
++      if (fsl == NULL)
++	{
++	  THREAD_GSCOPE_WAIT ();
++	  free (old);
++	  return 1;
++	}
++      else
++	{
++	  fsl->list[0] = old;
++	  fsl->count = 1;
++	}
++    }
++  else if (fsl->count < DL_SCOPE_FREE_LIST_SIZE)
++    fsl->list[fsl->count++] = old;
++  else
++    {
++      THREAD_GSCOPE_WAIT ();
++      while (fsl->count > 0)
++	free (fsl->list[--fsl->count]);
++      return 1;
++    }
++  return 0;
++}
+ 
+ static void
+ dl_open_worker (void *a)
+@@ -429,17 +463,10 @@ dl_open_worker (void *a)
+ 	      memcpy (newp, imap->l_scope, cnt * sizeof (imap->l_scope[0]));
+ 	      struct r_scope_elem **old = imap->l_scope;
+ 
+-	      if (RTLD_SINGLE_THREAD_P)
+-		imap->l_scope = newp;
+-	      else
+-		{
+-		  __rtld_mrlock_change (imap->l_scope_lock);
+-		  imap->l_scope = newp;
+-		  __rtld_mrlock_done (imap->l_scope_lock);
+-		}
++	      imap->l_scope = newp;
+ 
+ 	      if (old != imap->l_scope_mem)
+-		free (old);
++		_dl_scope_free (old);
+ 
+ 	      imap->l_scope_max = new_size;
+ 	    }
+--- libc/include/link.h.jj	2007-05-21 23:33:49.000000000 +0200
++++ libc/include/link.h	2007-06-13 13:10:50.000000000 +0200
+@@ -44,7 +44,6 @@ extern unsigned int la_objopen (struct l
+ #include <dl-lookupcfg.h>
+ #include <tls.h>
+ #include <bits/libc-lock.h>
+-#include <rtld-lowlevel.h>
+ 
+ 
+ /* Some internal data structures of the dynamic linker used in the
+@@ -220,8 +219,6 @@ struct link_map
+     /* This is an array defining the lookup scope for this link map.
+        There are initially at most three different scope lists.  */
+     struct r_scope_elem **l_scope;
+-    /* We need to protect using the SCOPEREC.  */
+-    __rtld_mrlock_define (, l_scope_lock)
+ 
+     /* A similar array, this time only with the local scope.  This is
+        used occasionally.  */
+--- libc/sysdeps/generic/ldsodefs.h.jj	2007-05-21 23:33:53.000000000 +0200
++++ libc/sysdeps/generic/ldsodefs.h	2007-06-13 13:11:09.000000000 +0200
+@@ -38,7 +38,6 @@
+ #include <bits/libc-lock.h>
+ #include <hp-timing.h>
+ #include <tls.h>
+-#include <rtld-lowlevel.h>
+ 
+ __BEGIN_DECLS
+ 
+@@ -488,6 +487,12 @@ struct rtld_global
+ 
+   EXTERN void (*_dl_wait_lookup_done) (void);
+ 
++  /* Scopes to free after next THREAD_GSCOPE_WAIT ().  */
++  EXTERN struct dl_scope_free_list
++  {
++    size_t count;
++    struct r_scope_elem **list[50];
++  } *_dl_scope_free_list;
+ #ifdef SHARED
+ };
+ # define __rtld_global_attribute__
+@@ -840,9 +845,7 @@ enum
+     DL_LOOKUP_ADD_DEPENDENCY = 1,
+     /* Return most recent version instead of default version for
+        unversioned lookup.  */
+-    DL_LOOKUP_RETURN_NEWEST = 2,
+-    /* Set if the scopr lock in the UNDEF_MAP is taken.  */
+-    DL_LOOKUP_SCOPE_LOCK = 4
++    DL_LOOKUP_RETURN_NEWEST = 2
+   };
+ 
+ /* Lookup versioned symbol.  */
+@@ -1050,6 +1053,11 @@ extern void *_dl_open (const char *name,
+ 		       Lmid_t nsid, int argc, char *argv[], char *env[])
+      attribute_hidden;
+ 
++/* Free or queue for freeing scope OLD.  If other threads might be
++   in the middle of _dl_fixup, _dl_profile_fixup or dl*sym using the
++   old scope, OLD can't be freed until no thread is using it.  */
++extern int _dl_scope_free (struct r_scope_elem **old) attribute_hidden;
++
+ /* Add module to slot information data.  */
+ extern void _dl_add_to_slotinfo (struct link_map  *l) attribute_hidden;
+ 

@@ -1,0 +1,89 @@
+2007-02-21  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #4076]
+	* io/ftw.c (ftw_startup): Handle special case of FTW_CHDIR in /.
+	(open_dir_stream): Likewise.
+	* io/Makefile (tests): Add bug-ftw5.
+	* io/bug-ftw5.c: New file.
+
+--- libc/io/ftw.c	10 May 2006 06:35:59 -0000	1.54
++++ libc/io/ftw.c	21 Feb 2007 09:36:15 -0000	1.55
+@@ -348,8 +348,17 @@ open_dir_stream (int *dfdp, struct ftw_d
+ 	}
+       else
+ 	{
+-	  const char *name = ((data->flags & FTW_CHDIR)
+-			      ? data->dirbuf + data->ftw.base: data->dirbuf);
++	  const char *name;
++
++	  if (data->flags & FTW_CHDIR)
++	    {
++	      name = data->dirbuf + data->ftw.base;
++	      if (name[0] == '\0')
++		name = ".";
++	    }
++	  else
++	    name = data->dirbuf;
++
+ 	  dirp->stream = __opendir (name);
+ 	}
+ 
+@@ -721,9 +730,16 @@ ftw_startup (const char *dir, int is_nft
+   /* Get stat info for start directory.  */
+   if (result == 0)
+     {
+-      const char *name = ((data.flags & FTW_CHDIR)
+-			  ? data.dirbuf + data.ftw.base
+-			  : data.dirbuf);
++      const char *name;
++
++      if (data.flags & FTW_CHDIR)
++	{
++	  name = data.dirbuf + data.ftw.base;
++	  if (name[0] == '\0')
++	    name = ".";
++	}
++      else
++	name = data.dirbuf;
+ 
+       if (((flags & FTW_PHYS)
+ 	   ? LXSTAT (_STAT_VER, name, &st)
+--- libc/io/Makefile	5 Dec 2006 21:26:11 -0000	1.68
++++ libc/io/Makefile	21 Feb 2007 09:35:36 -0000	1.69
+@@ -66,7 +66,7 @@ tests		:= test-utime test-stat test-stat
+ 		   tst-openat tst-unlinkat tst-fstatat tst-futimesat \
+ 		   tst-renameat tst-fchownat tst-fchmodat tst-faccessat \
+ 		   tst-symlinkat tst-linkat tst-readlinkat tst-mkdirat \
+-		   tst-mknodat tst-mkfifoat tst-ttyname_r
++		   tst-mknodat tst-mkfifoat tst-ttyname_r bug-ftw5
+ 
+ distribute	:= ftwtest-sh
+ 
+--- libc/io/bug-ftw5.c	1 Jan 1970 00:00:00 -0000
++++ libc/io/bug-ftw5.c	21 Feb 2007 09:35:26 -0000	1.1
+@@ -0,0 +1,25 @@
++#include <errno.h>
++#include <ftw.h>
++#include <stdio.h>
++
++static int
++fn (const char *file, const struct stat *sb, int flag, struct FTW *s)
++{
++  puts (file);
++  return FTW_STOP;
++}
++
++static int
++do_test (void)
++{
++  if (nftw ("/", fn, 0, FTW_CHDIR | FTW_ACTIONRETVAL) < 0)
++    {
++      printf ("nftw / FTW_CHDIR: %m\n");
++      return 1;
++    }
++
++  return 0;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"

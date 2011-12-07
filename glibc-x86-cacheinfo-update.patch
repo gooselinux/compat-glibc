@@ -1,0 +1,78 @@
+2009-05-10  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/x86_64/cacheinfo.c (intel_02_cache_info): Add missing entries
+	for recent processor.
+	* sysdeps/unix/sysv/linux/i386/sysconf.c (intel_02_cache_info):
+	Likewise.
+
+2009-02-01  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/x86_64/cacheinfo.c (intel_02_known): Add new descriptors.
+	* sysdeps/unix/sysv/linux/i386/sysconf.c (intel_02_known): Likewise.
+
+--- libc/sysdeps/unix/sysv/linux/i386/sysconf.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/sysdeps/unix/sysv/linux/i386/sysconf.c	2009-05-11 04:16:43.000000000 -0400
+@@ -76,8 +76,11 @@ static const struct intel_02_cache_info
+   {
+     { 0x06, _SC_LEVEL1_ICACHE_SIZE, 8192, 4, 32 },
+     { 0x08, _SC_LEVEL1_ICACHE_SIZE, 16384, 4, 32 },
++    { 0x09, _SC_LEVEL1_ICACHE_SIZE, 32768, 4, 32 },
+     { 0x0a, _SC_LEVEL1_DCACHE_SIZE, 8192, 2, 32 },
+     { 0x0c, _SC_LEVEL1_DCACHE_SIZE, 16384, 4, 32 },
++    { 0x0d, _SC_LEVEL1_DCACHE_SIZE, 16384, 4, 64 },
++    { 0x21, _SC_LEVEL2_CACHE_SIZE, 262144, 8, 64 },
+     { 0x22, _SC_LEVEL3_CACHE_SIZE, 524288, 4, 64 },
+     { 0x23, _SC_LEVEL3_CACHE_SIZE, 1048576, 8, 64 },
+     { 0x25, _SC_LEVEL3_CACHE_SIZE, 2097152, 8, 64 },
+@@ -122,6 +125,18 @@ static const struct intel_02_cache_info
+     { 0x85, _SC_LEVEL2_CACHE_SIZE, 2097152, 8, 32 },
+     { 0x86, _SC_LEVEL2_CACHE_SIZE, 524288, 4, 64 },
+     { 0x87, _SC_LEVEL2_CACHE_SIZE, 1048576, 8, 64 },
++    { 0xd0, _SC_LEVEL3_CACHE_SIZE, 524288, 4, 64 },
++    { 0xd1, _SC_LEVEL3_CACHE_SIZE, 1048576, 4, 64 },
++    { 0xd2, _SC_LEVEL3_CACHE_SIZE, 2097152, 4, 64 },
++    { 0xd6, _SC_LEVEL3_CACHE_SIZE, 1048576, 8, 64 },
++    { 0xd7, _SC_LEVEL3_CACHE_SIZE, 2097152, 8, 64 },
++    { 0xd8, _SC_LEVEL3_CACHE_SIZE, 4194304, 8, 64 },
++    { 0xdc, _SC_LEVEL3_CACHE_SIZE, 2097152, 12, 64 },
++    { 0xdd, _SC_LEVEL3_CACHE_SIZE, 4194304, 12, 64 },
++    { 0xde, _SC_LEVEL3_CACHE_SIZE, 8388608, 12, 64 },
++    { 0xe3, _SC_LEVEL3_CACHE_SIZE, 2097152, 16, 64 },
++    { 0xe3, _SC_LEVEL3_CACHE_SIZE, 4194304, 16, 64 },
++    { 0xe4, _SC_LEVEL3_CACHE_SIZE, 8388608, 16, 64 },
+   };
+ #define nintel_02_known (sizeof (intel_02_known) / sizeof (intel_02_known[0]))
+ 
+--- libc/sysdeps/x86_64/cacheinfo.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/sysdeps/x86_64/cacheinfo.c	2009-05-11 04:16:44.000000000 -0400
+@@ -34,8 +38,11 @@ static const struct intel_02_cache_info
+   {
+     { 0x06, _SC_LEVEL1_ICACHE_SIZE,    8192,  4, 32 },
+     { 0x08, _SC_LEVEL1_ICACHE_SIZE,   16384,  4, 32 },
++    { 0x09, _SC_LEVEL1_ICACHE_SIZE,   32768,  4, 32 },
+     { 0x0a, _SC_LEVEL1_DCACHE_SIZE,    8192,  2, 32 },
+     { 0x0c, _SC_LEVEL1_DCACHE_SIZE,   16384,  4, 32 },
++    { 0x0d, _SC_LEVEL1_DCACHE_SIZE,   16384,  4, 64 },
++    { 0x21, _SC_LEVEL2_CACHE_SIZE,   262144,  8, 64 },
+     { 0x22, _SC_LEVEL3_CACHE_SIZE,   524288,  4, 64 },
+     { 0x23, _SC_LEVEL3_CACHE_SIZE,  1048576,  8, 64 },
+     { 0x25, _SC_LEVEL3_CACHE_SIZE,  2097152,  8, 64 },
+@@ -80,6 +87,18 @@ static const struct intel_02_cache_info
+     { 0x85, _SC_LEVEL2_CACHE_SIZE,  2097152,  8, 32 },
+     { 0x86, _SC_LEVEL2_CACHE_SIZE,   524288,  4, 64 },
+     { 0x87, _SC_LEVEL2_CACHE_SIZE,  1048576,  8, 64 },
++    { 0xd0, _SC_LEVEL3_CACHE_SIZE,   524288,  4, 64 },
++    { 0xd1, _SC_LEVEL3_CACHE_SIZE,  1048576,  4, 64 },
++    { 0xd2, _SC_LEVEL3_CACHE_SIZE,  2097152,  4, 64 },
++    { 0xd6, _SC_LEVEL3_CACHE_SIZE,  1048576,  8, 64 },
++    { 0xd7, _SC_LEVEL3_CACHE_SIZE,  2097152,  8, 64 },
++    { 0xd8, _SC_LEVEL3_CACHE_SIZE,  4194304,  8, 64 },
++    { 0xdc, _SC_LEVEL3_CACHE_SIZE,  2097152, 12, 64 },
++    { 0xdd, _SC_LEVEL3_CACHE_SIZE,  4194304, 12, 64 },
++    { 0xde, _SC_LEVEL3_CACHE_SIZE,  8388608, 12, 64 },
++    { 0xe3, _SC_LEVEL3_CACHE_SIZE,  2097152, 16, 64 },
++    { 0xe3, _SC_LEVEL3_CACHE_SIZE,  4194304, 16, 64 },
++    { 0xe4, _SC_LEVEL3_CACHE_SIZE,  8388608, 16, 64 },
+   };
+ 
+ #define nintel_02_known (sizeof (intel_02_known) / sizeof (intel_02_known [0]))

@@ -1,0 +1,186 @@
+2007-12-16  Ulrich Drepper  <drepper@redhat.com>
+
+	* malloc/malloc.c (public_mTRIm): Iterate over all arenas and call
+	mTRIm for all of them.
+	(mTRIm): Additionally iterate over all free blocks and use madvise
+	to free memory for all those blocks which contain at least one
+	memory page.
+	* malloc/tst-trim1.c: New file.
+	* malloc/Makefile (tests): Add tst-trim1.
+
+--- libc/malloc/Makefile	21 May 2007 16:12:25 -0000	1.55
++++ libc/malloc/Makefile	16 Dec 2007 22:57:50 -0000	1.56
+@@ -27,7 +27,7 @@ all:
+ dist-headers := malloc.h
+ headers := $(dist-headers) obstack.h mcheck.h
+ tests := mallocbug tst-malloc tst-valloc tst-calloc tst-obstack \
+-	 tst-mallocstate tst-mcheck tst-mallocfork
++	 tst-mallocstate tst-mcheck tst-mallocfork tst-trim1
+ test-srcs = tst-mtrace
+ 
+ distribute = thread-m.h mtrace.pl mcheck-init.c stackinfo.h memusage.h \
+--- libc/malloc/malloc.c	11 Dec 2007 23:46:31 -0000	1.182
++++ libc/malloc/malloc.c	16 Dec 2007 22:52:58 -0000	1.183
+@@ -1592,7 +1592,7 @@ static Void_t*  _int_pvalloc(mstate, siz
+ static Void_t** _int_icalloc(mstate, size_t, size_t, Void_t**);
+ static Void_t** _int_icomalloc(mstate, size_t, size_t*, Void_t**);
+ #endif
+-static int      mTRIm(size_t);
++static int      mTRIm(mstate, size_t);
+ static size_t   mUSABLe(Void_t*);
+ static void     mSTATs(void);
+ static int      mALLOPt(int, int);
+@@ -4013,13 +4011,22 @@ public_cFREe(Void_t* m)
+ int
+ public_mTRIm(size_t s)
+ {
+-  int result;
++  int result = 0;
+ 
+   if(__malloc_initialized < 0)
+     ptmalloc_init ();
+-  (void)mutex_lock(&main_arena.mutex);
+-  result = mTRIm(s);
+-  (void)mutex_unlock(&main_arena.mutex);
++
++  mstate ar_ptr = &main_arena;
++  do
++    {
++      (void) mutex_lock (&ar_ptr->mutex);
++      result |= mTRIm (ar_ptr, s);
++      (void) mutex_unlock (&ar_ptr->mutex);
++
++      ar_ptr = ar_ptr->next;
++    }
++  while (ar_ptr != &main_arena);
++
+   return result;
+ }
+ 
+@@ -5489,20 +5496,60 @@ _int_pvalloc(av, bytes) mstate av, size_
+ */
+ 
+ #if __STD_C
+-int mTRIm(size_t pad)
++static int mTRIm(mstate av, size_t pad)
+ #else
+-int mTRIm(pad) size_t pad;
++static int mTRIm(av, pad) mstate av; size_t pad;
+ #endif
+ {
+-  mstate av = &main_arena; /* already locked */
+-
+   /* Ensure initialization/consolidation */
+-  malloc_consolidate(av);
++  malloc_consolidate (av);
++
++  const size_t ps = mp_.pagesize;
++  int psindex = bin_index (ps);
++  const size_t psm1 = ps - 1;
++
++  int result = 0;
++  for (int i = 1; i < NBINS; ++i)
++    if (i == 1 || i >= psindex)
++      {
++        mbinptr bin = bin_at (av, i);
++
++        for (mchunkptr p = last (bin); p != bin; p = p->bk)
++	  {
++	    INTERNAL_SIZE_T size = chunksize (p);
++
++	    if (size > psm1 + sizeof (struct malloc_chunk))
++	      {
++		/* See whether the chunk contains at least one unused page.  */
++		char *paligned_mem = (char *) (((uintptr_t) p
++						+ sizeof (struct malloc_chunk)
++						+ psm1) & ~psm1);
++
++		assert ((char *) chunk2mem (p) + 4 * SIZE_SZ <= paligned_mem);
++		assert ((char *) p + size > paligned_mem);
++
++		/* This is the size we could potentially free.  */
++		size -= paligned_mem - (char *) p;
++
++		if (size > psm1)
++		  {
++#ifdef MALLOC_DEBUG
++		    /* When debugging we simulate destroying the memory
++		       content.  */
++		    memset (paligned_mem, 0x89, size & ~psm1);
++#endif
++		    madvise (paligned_mem, size & ~psm1, MADV_DONTNEED);
++
++		    result = 1;
++		  }
++	      }
++	  }
++      }
+ 
+ #ifndef MORECORE_CANNOT_TRIM
+-  return sYSTRIm(pad, av);
++  return result | (av == &main_arena ? sYSTRIm (pad, av) : 0);
+ #else
+-  return 0;
++  return result;
+ #endif
+ }
+ 
+--- libc/malloc/tst-trim1.c	1 Jan 1970 00:00:00 -0000
++++ libc/malloc/tst-trim1.c	16 Dec 2007 22:57:25 -0000	1.1
+@@ -0,0 +1,56 @@
++#include <malloc.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define N 10000
++
++static void *arr[N];
++
++static int
++do_test (void)
++{
++  for (int i = 0; i < N; ++i)
++    {
++      size_t size = random () % 16384;
++
++      if ((arr[i] = malloc (size)) == NULL)
++	{
++	nomem:
++	  puts ("not enough memory");
++	  return 0;
++	}
++
++      memset (arr[i], size, size);
++    }
++
++  void *p = malloc (256);
++  if (p == NULL)
++    goto nomem;
++  memset (p, 1, 256);
++
++  puts ("==================================================================");
++
++  for (int i = 0; i < N; ++i)
++    if (i % 13 != 0)
++      free (arr[i]);
++
++  puts ("==================================================================");
++
++  malloc_trim (0);
++
++  puts ("==================================================================");
++
++  p = malloc (30000);
++  if (p == NULL)
++    goto nomem;
++
++  memset (p, 2, 30000);
++
++  malloc_trim (0);
++
++  return 0;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"

@@ -1,0 +1,106 @@
+2009-02-05  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/unix/opendir.c (__alloc_dir): We have a lot more memory
+	today than when the original code was written.  Use larger
+	buffers.  This also makes it unnecessary to have stat information,
+	if this causes extra efforts.
+	(__opendir): In case O_DIRECTORY works, don't call fstat just for
+	__alloc_dir.
+
+2008-03-30  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/unix/opendir.c (__alloc_dir): If allocation fails for size
+	provided through st_blksize, try the default size before giving up.
+
+--- libc/sysdeps/unix/opendir.c	4 Aug 2007 17:21:10 -0000	1.45
++++ libc/sysdeps/unix/opendir.c	5 Feb 2009 18:20:33 -0000	1.47
+@@ -79,6 +79,7 @@ DIR *
+ __opendir (const char *name)
+ {
+   struct stat64 statbuf;
++  struct stat64 *statp = NULL;
+ 
+   if (__builtin_expect (name[0], '\1') == '\0')
+     {
+@@ -113,16 +114,14 @@ __opendir (const char *name)
+   if (__builtin_expect (fd, 0) < 0)
+     return NULL;
+ 
+-  /* Now make sure this really is a directory and nothing changed since
+-     the `stat' call.  We do not have to perform the test for the
+-     descriptor being associated with a directory if we know the
+-     O_DIRECTORY flag is honored by the kernel.  */
+-  if (__builtin_expect (__fxstat64 (_STAT_VER, fd, &statbuf), 0) < 0)
+-    goto lose;
+ #ifdef O_DIRECTORY
+   if (o_directory_works <= 0)
+ #endif
+     {
++      /* Now make sure this really is a directory and nothing changed since
++	 the `stat' call.  */
++      if (__builtin_expect (__fxstat64 (_STAT_VER, fd, &statbuf), 0) < 0)
++	goto lose;
+       if (__builtin_expect (! S_ISDIR (statbuf.st_mode), 0))
+ 	{
+ 	  __set_errno (ENOTDIR);
+@@ -130,9 +129,10 @@ __opendir (const char *name)
+ 	  close_not_cancel_no_status (fd);
+ 	  return NULL;
+ 	}
++      statp = &statbuf;
+     }
+ 
+-  return __alloc_dir (fd, true, &statbuf);
++  return __alloc_dir (fd, true, statp);
+ }
+ weak_alias (__opendir, opendir)
+ 
+@@ -144,29 +144,35 @@ __alloc_dir (int fd, bool close_fd, cons
+   if (__builtin_expect (__fcntl (fd, F_SETFD, FD_CLOEXEC), 0) < 0)
+     goto lose;
+ 
+-  size_t allocation;
++  const size_t default_allocation = (4 * BUFSIZ < sizeof (struct dirent64)
++				     ? sizeof (struct dirent64) : 4 * BUFSIZ);
++  const size_t small_allocation = (BUFSIZ < sizeof (struct dirent64)
++				   ? sizeof (struct dirent64) : BUFSIZ);
++  size_t allocation = default_allocation;
+ #ifdef _STATBUF_ST_BLKSIZE
+-  if (__builtin_expect ((size_t) statp->st_blksize >= sizeof (struct dirent64),
+-			1))
++  if (statp != NULL && default_allocation < statp->st_blksize)
+     allocation = statp->st_blksize;
+-  else
+ #endif
+-    allocation = (BUFSIZ < sizeof (struct dirent64)
+-		  ? sizeof (struct dirent64) : BUFSIZ);
+ 
+   const int pad = -sizeof (DIR) % __alignof__ (struct dirent64);
+-
++ 
+   DIR *dirp = (DIR *) malloc (sizeof (DIR) + allocation + pad);
+   if (dirp == NULL)
+-  lose:
+     {
+-      if (close_fd)
++      allocation = small_allocation;
++      dirp = (DIR *) malloc (sizeof (DIR) + allocation + pad);
++
++      if (dirp == NULL)
++      lose:
+ 	{
+-	  int save_errno = errno;
+-	  close_not_cancel_no_status (fd);
+-	  __set_errno (save_errno);
++	  if (close_fd)
++	    {
++	      int save_errno = errno;
++	      close_not_cancel_no_status (fd);
++	      __set_errno (save_errno);
++	    }
++	  return NULL;
+ 	}
+-      return NULL;
+     }
+   memset (dirp, '\0', sizeof (DIR));
+   dirp->data = (char *) (dirp + 1) + pad;

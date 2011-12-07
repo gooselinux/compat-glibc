@@ -1,0 +1,139 @@
+2008-10-17  Jakub Jelinek  <jakub@redhat.com>
+
+	* elf/Makefile: Add rules to build and run tst-tls17.
+	* elf/tst-tls17.c: New test.
+	* elf/tst-tlsmod17a.c: New file.
+	* elf/tst-tlsmod17b.c: Likewise.
+
+2008-10-16  Ulrich Drepper  <drepper@redhat.com>
+
+	* elf/dl-tls.c (_dl_update_slotinfo): Copy all of the initial DTV.
+
+--- libc/elf/Makefile	19 Aug 2008 00:18:58 -0000	1.328
++++ libc/elf/Makefile	17 Oct 2008 15:23:58 -0000	1.329
+@@ -165,7 +165,7 @@ tests += loadtest restest1 preloadtest l
+ 	 restest2 next dblload dblunload reldep5 reldep6 reldep7 reldep8 \
+ 	 circleload1 tst-tls3 tst-tls4 tst-tls5 tst-tls6 tst-tls7 tst-tls8 \
+ 	 tst-tls10 tst-tls11 tst-tls12 tst-tls13 tst-tls14 tst-tls15 \
+-	 tst-tls-dlinfo \
++	 tst-tls17 tst-tls-dlinfo \
+ 	 tst-align tst-align2 $(tests-execstack-$(have-z-execstack)) \
+ 	 tst-dlmodcount tst-dlopenrpath tst-deep1 \
+ 	 tst-dlmopen1 tst-dlmopen2 tst-dlmopen3 \
+@@ -183,6 +183,7 @@ ifeq (yesyes,$(have-fpie)$(build-shared)
+ tests: $(objpfx)tst-pie1.out
+ endif
+ tests: $(objpfx)tst-leaks1-mem
++tlsmod17a-suffixes = 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19
+ modules-names = testobj1 testobj2 testobj3 testobj4 testobj5 testobj6 \
+ 		testobj1_1 failobj constload2 constload3 unloadmod \
+ 		dep1 dep2 dep3 dep4 $(modules-vis-$(have-protected)) \
+@@ -201,6 +202,8 @@ modules-names = testobj1 testobj2 testob
+ 		tst-tlsmod9 tst-tlsmod10 tst-tlsmod11 tst-tlsmod12 \
+ 		tst-tlsmod13 tst-tlsmod13a tst-tlsmod14a tst-tlsmod14b \
+ 		tst-tlsmod15a tst-tlsmod15b \
++		$(patsubst %,tst-tlsmod17a%,$(tlsmod17a-suffixes)) \
++		tst-tlsmod17b \
+ 		circlemod1 circlemod1a circlemod2 circlemod2a \
+ 		circlemod3 circlemod3a \
+ 		reldep8mod1 reldep8mod2 reldep8mod3 \
+@@ -711,7 +714,12 @@ $(objpfx)tst-tls15.out: $(objpfx)tst-tls
+ $(objpfx)tst-tls-dlinfo: $(libdl)
+ $(objpfx)tst-tls-dlinfo.out: $(objpfx)tst-tlsmod2.so
+ 
+-
++$(objpfx)tst-tls17: $(libdl)
++$(objpfx)tst-tls17.out: $(objpfx)tst-tlsmod17b.so
++$(patsubst %,$(objpfx)tst-tlsmod17a%.os,$(tlsmod17a-suffixes)): $(objpfx)tst-tlsmod17a%.os : tst-tlsmod17a.c
++	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ -DN=$* -DNOT_IN_libc=1 $<
++$(patsubst %,$(objpfx)tst-tlsmod17a%.so,$(tlsmod17a-suffixes)): $(objpfx)tst-tlsmod17a%.so: $(objpfx)ld.so
++$(objpfx)tst-tlsmod17b.so: $(patsubst %,$(objpfx)tst-tlsmod17a%.so,$(tlsmod17a-suffixes))
+ 
+ CFLAGS-tst-align.c = $(stack-align-test-flags)
+ CFLAGS-tst-align2.c = $(stack-align-test-flags)
+--- libc/elf/dl-tls.c	12 May 2008 05:35:52 -0000	1.7
++++ libc/elf/dl-tls.c	16 Oct 2008 21:57:52 -0000	1.9
+@@ -634,7 +634,7 @@ _dl_update_slotinfo (unsigned long int r
+ 		      newp = malloc ((2 + newsize) * sizeof (dtv_t));
+ 		      if (newp == NULL)
+ 			oom ();
+-		      memcpy (newp, &dtv[-1], oldsize * sizeof (dtv_t));
++		      memcpy (newp, &dtv[-1], (2 + oldsize) * sizeof (dtv_t));
+ 		    }
+ 		  else
+ 		    {
+--- libc/elf/tst-tls17.c	1 Jan 1970 00:00:00 -0000
++++ libc/elf/tst-tls17.c	17 Oct 2008 15:23:11 -0000	1.1
+@@ -0,0 +1,28 @@
++#include <dlfcn.h>
++#include <stdio.h>
++
++static int
++do_test (void)
++{
++  void *h = dlopen ("tst-tlsmod17b.so", RTLD_LAZY);
++  if (h == NULL)
++    {
++      puts ("unexpectedly failed to open tst-tlsmod17b.so");
++      exit (1);
++    }
++
++  int (*fp) (void) = (int (*) (void)) dlsym (h, "tlsmod17b");
++  if (fp == NULL)
++    {
++      puts ("cannot find tlsmod17b");
++      exit (1);
++    }
++
++  if (fp ())
++    exit (1);
++
++  return 0;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/elf/tst-tlsmod17a.c	1 Jan 1970 00:00:00 -0000
++++ libc/elf/tst-tlsmod17a.c	17 Oct 2008 15:23:44 -0000	1.1
+@@ -0,0 +1,23 @@
++#include <stdio.h>
++
++#ifndef N
++#define N 0
++#endif
++#define CONCAT1(s, n) s##n
++#define CONCAT(s, n) CONCAT1(s, n)
++
++__thread int CONCAT (v, N) = 4;
++
++int
++CONCAT (tlsmod17a, N) (void)
++{
++  int *p = &CONCAT (v, N);
++  /* GCC assumes &var is never NULL, add optimization barrier.  */
++  asm volatile ("" : "+r" (p));
++  if (p == NULL || *p != 4)
++    {
++      printf ("fail %d %p\n", N, p);
++      return 1;
++    }
++  return 0;
++}
+--- libc/elf/tst-tlsmod17b.c	1 Jan 1970 00:00:00 -0000
++++ libc/elf/tst-tlsmod17b.c	17 Oct 2008 15:23:44 -0000	1.1
+@@ -0,0 +1,15 @@
++#define P(N) extern int tlsmod17a##N (void);
++#define PS P(0) P(1) P(2) P(3) P(4) P(5) P(6) P(7) P(8) P(9) \
++	   P(10) P(12) P(13) P(14) P(15) P(16) P(17) P(18) P(19)
++PS
++#undef P
++
++int
++tlsmod17b (void)
++{
++  int res = 0;
++#define P(N) res |= tlsmod17a##N ();
++  PS
++#undef P
++  return res;
++}

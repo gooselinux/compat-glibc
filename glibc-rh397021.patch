@@ -1,0 +1,518 @@
+008-01-08  Jakub Jelinek  <jakub@redhat.com>
+
+	* iconv/loop.c (UPDATE_PARAMS): Define to empty statement if not
+	defined.
+	(REINIT_PARAMS): Likewise.  Undefine before end of file.
+	(STANDARD_TO_LOOP_ERR_HANDLER): Use UPDATE_PARAMS before calling
+	transliteration hooks and REINIT_PARAMS afterwards.
+	* iconvdata/iso-2022-jp.c (BODY): Use a separate variable for
+	status.
+	(REINIT_PARAMS): Define.
+	* iconvdata/ibm1364.c (REINIT_PARAMS): Likewise.
+	* iconvdata/ibm930.c (REINIT_PARAMS): Likewise.
+	* iconvdata/ibm933.c (REINIT_PARAMS): Likewise.
+	* iconvdata/ibm935.c (REINIT_PARAMS): Likewise.
+	* iconvdata/ibm937.c (REINIT_PARAMS): Likewise.
+	* iconvdata/ibm939.c (REINIT_PARAMS): Likewise.
+	* iconvdata/iso-2022-cn.c (REINIT_PARAMS): Likewise.
+	* iconvdata/iso-2022-cn-ext.c (REINIT_PARAMS): Likewise.
+	* iconvdata/iso-2022-jp-3.c (REINIT_PARAMS): Likewise.
+	* iconvdata/iso-2022-kr.c (REINIT_PARAMS): Likewise.
+	* iconvdata/Makefile: Add rules to build and run tst-iconv7.c.
+	* iconvdata/tst-iconv7.c: New test.
+
+--- libc/iconv/loop.c	7 Nov 2007 23:58:39 -0000	1.37
++++ libc/iconv/loop.c	9 Jan 2008 20:01:46 -0000	1.38
+@@ -174,6 +174,15 @@
+ # define EXTRA_LOOP_DECLS
+ #endif
+ 
++/* Allow using UPDATE_PARAMS in macros where #ifdef UPDATE_PARAMS test
++   isn't possible.  */
++#ifndef UPDATE_PARAMS
++# define UPDATE_PARAMS do { } while (0)
++#endif
++#ifndef REINIT_PARAMS
++# define REINIT_PARAMS do { } while (0)
++#endif
++
+ 
+ /* To make it easier for the writers of the modules, we define a macro
+    to test whether we have to ignore errors.  */
+@@ -214,6 +223,10 @@
+ 	 case we are not doing any error recovery outself.  */		      \
+       break;								      \
+ 									      \
++    /* If needed, flush any conversion state, so that __gconv_transliterate   \
++       starts with current shift state.  */				      \
++    UPDATE_PARAMS;							      \
++									      \
+     /* First try the transliteration methods.  */			      \
+     for (trans = step_data->__trans; trans != NULL; trans = trans->__next)    \
+       {									      \
+@@ -223,6 +236,9 @@
+ 	if (result != __GCONV_ILLEGAL_INPUT)				      \
+ 	  break;							      \
+       }									      \
++									      \
++    REINIT_PARAMS;							      \
++									      \
+     /* If any of them recognized the input continue with the loop.  */	      \
+     if (result != __GCONV_ILLEGAL_INPUT)				      \
+       {									      \
+@@ -319,9 +335,7 @@ FCTNAME (LOOPFCT) (struct __gconv_step *
+   /* Update the pointers pointed to by the parameters.  */
+   *inptrp = inptr;
+   *outptrp = outptr;
+-#ifdef UPDATE_PARAMS
+   UPDATE_PARAMS;
+-#endif
+ 
+   return result;
+ }
+@@ -492,6 +506,7 @@ gconv_btowc (struct __gconv_step *step, 
+ #undef EXTRA_LOOP_DECLS
+ #undef INIT_PARAMS
+ #undef UPDATE_PARAMS
++#undef REINIT_PARAMS
+ #undef ONEBYTE_BODY
+ #undef UNPACK_BYTES
+ #undef CLEAR_STATE
+--- libc/iconvdata/Makefile	12 Dec 2007 07:59:05 -0000	1.155
++++ libc/iconvdata/Makefile	9 Jan 2008 20:03:36 -0000	1.156
+@@ -66,7 +66,7 @@ include ../Makeconfig
+ 
+ ifeq (yes,$(build-shared))
+ tests = bug-iconv1 bug-iconv2 tst-loading tst-e2big tst-iconv4 bug-iconv4 \
+-	tst-iconv6 bug-iconv6
++	tst-iconv6 bug-iconv6 tst-iconv7
+ ifeq ($(have-thread-library),yes)
+ tests += bug-iconv3
+ endif
+@@ -357,6 +357,8 @@ $(objpfx)tst-loading.out: $(objpfx)gconv
+ 			  $(addprefix $(objpfx),$(modules.so))
+ $(objpfx)tst-iconv4.out: $(objpfx)gconv-modules \
+ 			 $(addprefix $(objpfx),$(modules.so))
++$(objpfx)tst-iconv7.out: $(objpfx)gconv-modules \
++			 $(addprefix $(objpfx),$(modules.so))
+ 
+ $(objpfx)iconv-test.out: run-iconv-test.sh $(objpfx)gconv-modules \
+ 			 $(addprefix $(objpfx),$(modules.so)) \
+--- libc/iconvdata/ibm1364.c	19 Oct 2005 23:31:17 -0000	1.1
++++ libc/iconvdata/ibm1364.c	9 Jan 2008 20:02:54 -0000	1.2
+@@ -387,6 +387,7 @@ enum
+ #define LOOP_NEED_FLAGS
+ #define EXTRA_LOOP_DECLS	, int *curcsp
+ #define INIT_PARAMS		int curcs = *curcsp & ~7
++#define REINIT_PARAMS		curcs = *curcsp & ~7
+ #define UPDATE_PARAMS		*curcsp = curcs
+ #include <iconv/loop.c>
+ 
+--- libc/iconvdata/ibm930.c	28 Jun 2002 21:19:37 -0000	1.9
++++ libc/iconvdata/ibm930.c	9 Jan 2008 20:02:54 -0000	1.10
+@@ -277,6 +277,7 @@ enum
+ #define LOOP_NEED_FLAGS
+ #define EXTRA_LOOP_DECLS	, int *curcsp
+ #define INIT_PARAMS		int curcs = *curcsp & ~7
++#define REINIT_PARAMS		curcs = *curcsp & ~7
+ #define UPDATE_PARAMS		*curcsp = curcs
+ #include <iconv/loop.c>
+ 
+--- libc/iconvdata/ibm933.c	28 Jun 2002 21:20:20 -0000	1.8
++++ libc/iconvdata/ibm933.c	9 Jan 2008 20:02:54 -0000	1.9
+@@ -272,6 +272,7 @@ enum
+ #define LOOP_NEED_FLAGS
+ #define EXTRA_LOOP_DECLS	, int *curcsp
+ #define INIT_PARAMS		int curcs = *curcsp & ~7
++#define REINIT_PARAMS		curcs = *curcsp & ~7
+ #define UPDATE_PARAMS		*curcsp = curcs
+ #include <iconv/loop.c>
+ 
+--- libc/iconvdata/ibm935.c	28 Jun 2002 21:21:25 -0000	1.8
++++ libc/iconvdata/ibm935.c	9 Jan 2008 20:02:54 -0000	1.9
+@@ -272,6 +272,7 @@ enum
+ #define LOOP_NEED_FLAGS
+ #define EXTRA_LOOP_DECLS	, int *curcsp
+ #define INIT_PARAMS		int curcs = *curcsp & ~7
++#define REINIT_PARAMS		curcs = *curcsp & ~7
+ #define UPDATE_PARAMS		*curcsp = curcs
+ #include <iconv/loop.c>
+ 
+--- libc/iconvdata/ibm937.c	28 Jun 2002 21:21:25 -0000	1.10
++++ libc/iconvdata/ibm937.c	9 Jan 2008 20:02:54 -0000	1.11
+@@ -272,6 +272,7 @@ enum
+ #define LOOP_NEED_FLAGS
+ #define EXTRA_LOOP_DECLS	, int *curcsp
+ #define INIT_PARAMS		int curcs = *curcsp & ~7
++#define REINIT_PARAMS		curcs = *curcsp & ~7
+ #define UPDATE_PARAMS		*curcsp = curcs
+ #include <iconv/loop.c>
+ 
+--- libc/iconvdata/ibm939.c	21 May 2005 18:22:19 -0000	1.9
++++ libc/iconvdata/ibm939.c	9 Jan 2008 20:02:54 -0000	1.10
+@@ -277,6 +277,7 @@ enum
+ #define LOOP_NEED_FLAGS
+ #define EXTRA_LOOP_DECLS	, int *curcsp
+ #define INIT_PARAMS		int curcs = *curcsp & ~7
++#define REINIT_PARAMS		curcs = *curcsp & ~7
+ #define UPDATE_PARAMS		*curcsp = curcs
+ #include <iconv/loop.c>
+ 
+--- libc/iconvdata/iso-2022-cn-ext.c	28 Jul 2007 20:14:54 -0000	1.14
++++ libc/iconvdata/iso-2022-cn-ext.c	9 Jan 2008 20:02:54 -0000	1.15
+@@ -648,6 +648,12 @@ enum
+ #define EXTRA_LOOP_DECLS	, int *setp
+ #define INIT_PARAMS		int set = (*setp >> 3) & CURRENT_MASK; \
+ 				int ann = (*setp >> 3) & ~CURRENT_MASK
++#define REINIT_PARAMS		do					      \
++				  {					      \
++				    set = (*setp >> 3) & CURRENT_MASK;	      \
++				    ann = (*setp >> 3) & ~CURRENT_MASK;	      \
++				  }					      \
++				while (0)
+ #define UPDATE_PARAMS		*setp = (set | ann) << 3
+ #define LOOP_NEED_FLAGS
+ #include <iconv/loop.c>
+--- libc/iconvdata/iso-2022-cn.c	26 Aug 2007 03:16:36 -0000	1.22
++++ libc/iconvdata/iso-2022-cn.c	9 Jan 2008 20:02:54 -0000	1.23
+@@ -393,6 +393,12 @@ enum
+ #define EXTRA_LOOP_DECLS	, int *setp
+ #define INIT_PARAMS		int set = *setp & CURRENT_SEL_MASK; \
+ 				int ann = *setp & CURRENT_ANN_MASK
++#define REINIT_PARAMS		do					      \
++				  {					      \
++				    set = *setp & CURRENT_SEL_MASK;	      \
++				    ann = *setp & CURRENT_ANN_MASK;	      \
++				  }					      \
++				while (0)
+ #define UPDATE_PARAMS		*setp = set | ann
+ #include <iconv/loop.c>
+ 
+--- libc/iconvdata/iso-2022-jp-3.c	2 Aug 2004 22:15:40 -0000	1.4
++++ libc/iconvdata/iso-2022-jp-3.c	9 Jan 2008 20:02:54 -0000	1.5
+@@ -759,6 +760,12 @@ static const struct
+ #define EXTRA_LOOP_DECLS	, int *statep
+ #define INIT_PARAMS		int set = *statep & CURRENT_SEL_MASK;	      \
+ 				uint32_t lasttwo = *statep >> 6
++#define REINIT_PARAMS		do					      \
++				  {					      \
++				    set = *statep & CURRENT_SEL_MASK;	      \
++				    lasttwo = *statep >> 6;		      \
++				  }					      \
++				while (0)
+ #define UPDATE_PARAMS		*statep = set | (lasttwo << 6)
+ #include <iconv/loop.c>
+ 
+--- libc/iconvdata/iso-2022-jp.c	28 Jun 2002 21:13:11 -0000	1.38
++++ libc/iconvdata/iso-2022-jp.c	9 Jan 2008 20:02:02 -0000	1.39
+@@ -715,8 +715,7 @@ static const cvlist_t conversion_lists[4
+ 	       list that depends on the current language tag.  */	      \
+ 	    cvlist_t conversion_list;					      \
+ 	    unsigned char buf[2];					      \
+-									      \
+-	    result = __GCONV_ILLEGAL_INPUT;				      \
++	    int res = __GCONV_ILLEGAL_INPUT;				      \
+ 									      \
+ 	    if (var == iso2022jp2)					      \
+ 	      conversion_list = conversion_lists[tag >> 8];		      \
+@@ -735,7 +734,7 @@ static const cvlist_t conversion_lists[4
+ 			{						      \
+ 			  if (__builtin_expect (outptr + 3 > outend, 0))      \
+ 			    {						      \
+-			      result = __GCONV_FULL_OUTPUT;		      \
++			      res = __GCONV_FULL_OUTPUT;		      \
+ 			      break;					      \
+ 			    }						      \
+ 			  *outptr++ = ESC;				      \
+@@ -746,13 +745,13 @@ static const cvlist_t conversion_lists[4
+ 									      \
+ 		      if (__builtin_expect (outptr + 3 > outend, 0))	      \
+ 			{						      \
+-			  result = __GCONV_FULL_OUTPUT;			      \
++			  res = __GCONV_FULL_OUTPUT;			      \
+ 			  break;					      \
+ 			}						      \
+ 		      *outptr++ = ESC;					      \
+ 		      *outptr++ = 'N';					      \
+ 		      *outptr++ = ch - 0x80;				      \
+-		      result = __GCONV_OK;				      \
++		      res = __GCONV_OK;					      \
+ 		      break;						      \
+ 		    }							      \
+ 									      \
+@@ -774,7 +773,7 @@ static const cvlist_t conversion_lists[4
+ 				  if (__builtin_expect (outptr + 3 > outend,  \
+ 							0))		      \
+ 				    {					      \
+-				      result = __GCONV_FULL_OUTPUT;	      \
++				      res = __GCONV_FULL_OUTPUT;	      \
+ 				      break;				      \
+ 				    }					      \
+ 				  *outptr++ = ESC;			      \
+@@ -785,13 +784,13 @@ static const cvlist_t conversion_lists[4
+ 									      \
+ 			      if (__builtin_expect (outptr + 3 > outend, 0))  \
+ 				{					      \
+-				  result = __GCONV_FULL_OUTPUT;		      \
++				  res = __GCONV_FULL_OUTPUT;		      \
+ 				  break;				      \
+ 				}					      \
+ 			      *outptr++ = ESC;				      \
+ 			      *outptr++ = 'N';				      \
+ 			      *outptr++ = res;				      \
+-			      result = __GCONV_OK;			      \
++			      res = __GCONV_OK;				      \
+ 			      break;					      \
+ 			    }						      \
+ 			}						      \
+@@ -810,7 +809,7 @@ static const cvlist_t conversion_lists[4
+ 			{						      \
+ 			  if (__builtin_expect (outptr + 3 > outend, 0))      \
+ 			    {						      \
+-			      result = __GCONV_FULL_OUTPUT;		      \
++			      res = __GCONV_FULL_OUTPUT;		      \
+ 			      break;					      \
+ 			    }						      \
+ 			  *outptr++ = ESC;				      \
+@@ -821,11 +820,11 @@ static const cvlist_t conversion_lists[4
+ 									      \
+ 		      if (__builtin_expect (outptr + 1 > outend, 0))	      \
+ 			{						      \
+-			  result = __GCONV_FULL_OUTPUT;			      \
++			  res = __GCONV_FULL_OUTPUT;			      \
+ 			  break;					      \
+ 			}						      \
+ 		      *outptr++ = buf[0];				      \
+-		      result = __GCONV_OK;				      \
++		      res = __GCONV_OK;					      \
+ 		      break;						      \
+ 		    }							      \
+ 									      \
+@@ -837,7 +836,7 @@ static const cvlist_t conversion_lists[4
+ 			{						      \
+ 			  if (__builtin_expect (outptr + 3 > outend, 0))      \
+ 			    {						      \
+-			      result = __GCONV_FULL_OUTPUT;		      \
++			      res = __GCONV_FULL_OUTPUT;		      \
+ 			      break;					      \
+ 			    }						      \
+ 			  *outptr++ = ESC;				      \
+@@ -848,12 +847,12 @@ static const cvlist_t conversion_lists[4
+ 									      \
+ 		      if (__builtin_expect (outptr + 2 > outend, 0))	      \
+ 			{						      \
+-			  result = __GCONV_FULL_OUTPUT;			      \
++			  res = __GCONV_FULL_OUTPUT;			      \
+ 			  break;					      \
+ 			}						      \
+ 		      *outptr++ = buf[0];				      \
+ 		      *outptr++ = buf[1];				      \
+-		      result = __GCONV_OK;				      \
++		      res = __GCONV_OK;					      \
+ 		      break;						      \
+ 		    }							      \
+ 									      \
+@@ -869,7 +868,7 @@ static const cvlist_t conversion_lists[4
+ 			{						      \
+ 			  if (__builtin_expect (outptr + 4 > outend, 0))      \
+ 			    {						      \
+-			      result = __GCONV_FULL_OUTPUT;		      \
++			      res = __GCONV_FULL_OUTPUT;		      \
+ 			      break;					      \
+ 			    }						      \
+ 			  *outptr++ = ESC;				      \
+@@ -881,12 +880,12 @@ static const cvlist_t conversion_lists[4
+ 									      \
+ 		      if (__builtin_expect (outptr + 2 > outend, 0))	      \
+ 			{						      \
+-			  result = __GCONV_FULL_OUTPUT;			      \
++			  res = __GCONV_FULL_OUTPUT;			      \
+ 			  break;					      \
+ 			}						      \
+ 		      *outptr++ = buf[0];				      \
+ 		      *outptr++ = buf[1];				      \
+-		      result = __GCONV_OK;				      \
++		      res = __GCONV_OK;					      \
+ 		      break;						      \
+ 		    }							      \
+ 									      \
+@@ -903,7 +902,7 @@ static const cvlist_t conversion_lists[4
+ 			{						      \
+ 			  if (__builtin_expect (outptr + 3 > outend, 0))      \
+ 			    {						      \
+-			      result = __GCONV_FULL_OUTPUT;		      \
++			      res = __GCONV_FULL_OUTPUT;		      \
+ 			      break;					      \
+ 			    }						      \
+ 			  *outptr++ = ESC;				      \
+@@ -914,12 +913,12 @@ static const cvlist_t conversion_lists[4
+ 									      \
+ 		      if (__builtin_expect (outptr + 2 > outend, 0))	      \
+ 			{						      \
+-			  result = __GCONV_FULL_OUTPUT;			      \
++			  res = __GCONV_FULL_OUTPUT;			      \
+ 			  break;					      \
+ 			}						      \
+ 		      *outptr++ = buf[0];				      \
+ 		      *outptr++ = buf[1];				      \
+-		      result = __GCONV_OK;				      \
++		      res = __GCONV_OK;					      \
+ 		      break;						      \
+ 		    }							      \
+ 									      \
+@@ -936,7 +935,7 @@ static const cvlist_t conversion_lists[4
+ 			{						      \
+ 			  if (__builtin_expect (outptr + 4 > outend, 0))      \
+ 			    {						      \
+-			      result = __GCONV_FULL_OUTPUT;		      \
++			      res = __GCONV_FULL_OUTPUT;		      \
+ 			      break;					      \
+ 			    }						      \
+ 			  *outptr++ = ESC;				      \
+@@ -948,12 +947,12 @@ static const cvlist_t conversion_lists[4
+ 									      \
+ 		      if (__builtin_expect (outptr + 2 > outend, 0))	      \
+ 			{						      \
+-			  result = __GCONV_FULL_OUTPUT;			      \
++			  res = __GCONV_FULL_OUTPUT;			      \
+ 			  break;					      \
+ 			}						      \
+ 		      *outptr++ = buf[0];				      \
+ 		      *outptr++ = buf[1];				      \
+-		      result = __GCONV_OK;				      \
++		      res = __GCONV_OK;					      \
+ 		      break;						      \
+ 		    }							      \
+ 									      \
+@@ -972,7 +971,7 @@ static const cvlist_t conversion_lists[4
+ 			{						      \
+ 			  if (__builtin_expect (outptr + 3 > outend, 0))      \
+ 			    {						      \
+-			      result = __GCONV_FULL_OUTPUT;		      \
++			      res = __GCONV_FULL_OUTPUT;		      \
+ 			      break;					      \
+ 			    }						      \
+ 			  *outptr++ = ESC;				      \
+@@ -983,11 +982,11 @@ static const cvlist_t conversion_lists[4
+ 									      \
+ 		      if (__builtin_expect (outptr + 1 > outend, 0))	      \
+ 			{						      \
+-			  result = __GCONV_FULL_OUTPUT;			      \
++			  res = __GCONV_FULL_OUTPUT;			      \
+ 			  break;					      \
+ 			}						      \
+ 		      *outptr++ = buf[0] - 0x80;			      \
+-		      result = __GCONV_OK;				      \
++		      res = __GCONV_OK;					      \
+ 		      break;						      \
+ 		    }							      \
+ 									      \
+@@ -996,13 +995,16 @@ static const cvlist_t conversion_lists[4
+ 		default:						      \
+ 		  abort ();						      \
+ 		}							      \
+-	    while (result == __GCONV_ILLEGAL_INPUT			      \
++	    while (res == __GCONV_ILLEGAL_INPUT				      \
+ 		   && (conversion_list = CVLIST_REST (conversion_list)) != 0);\
+ 									      \
+-	    if (result == __GCONV_FULL_OUTPUT)				      \
+-	      break;							      \
++	    if (res == __GCONV_FULL_OUTPUT)				      \
++	      {								      \
++		result = res;						      \
++		break;							      \
++	      }								      \
+ 									      \
+-	    if (result == __GCONV_ILLEGAL_INPUT)			      \
++	    if (res == __GCONV_ILLEGAL_INPUT)				      \
+ 	      {								      \
+ 		STANDARD_TO_LOOP_ERR_HANDLER (4);			      \
+ 	      }								      \
+@@ -1017,6 +1019,13 @@ static const cvlist_t conversion_lists[4
+ #define INIT_PARAMS		int set = *setp & CURRENT_SEL_MASK;	      \
+ 				int set2 = *setp & CURRENT_ASSIGN_MASK;	      \
+ 				int tag = *setp & CURRENT_TAG_MASK;
++#define REINIT_PARAMS		do					      \
++				  {					      \
++				    set = *setp & CURRENT_SEL_MASK;	      \
++				    set2 = *setp & CURRENT_ASSIGN_MASK;	      \
++				    tag = *setp & CURRENT_TAG_MASK;	      \
++				  }					      \
++				while (0)
+ #define UPDATE_PARAMS		*setp = set | set2 | tag
+ #include <iconv/loop.c>
+ 
+--- libc/iconvdata/iso-2022-kr.c	26 Aug 2007 03:16:47 -0000	1.35
++++ libc/iconvdata/iso-2022-kr.c	9 Jan 2008 20:02:54 -0000	1.36
+@@ -261,6 +262,7 @@ enum
+ #define LOOP_NEED_FLAGS
+ #define EXTRA_LOOP_DECLS	, int *setp
+ #define INIT_PARAMS		int set = *setp
++#define REINIT_PARAMS		set = *setp
+ #define UPDATE_PARAMS		*setp = set
+ #include <iconv/loop.c>
+ 
+--- libc/iconvdata/tst-iconv7.c	1 Jan 1970 00:00:00 -0000
++++ libc/iconvdata/tst-iconv7.c	9 Jan 2008 20:03:22 -0000	1.1
+@@ -0,0 +1,61 @@
++#include <iconv.h>
++#include <locale.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++static int
++do_test (void)
++{
++  setlocale (LC_ALL, "de_DE.UTF-8");
++
++  iconv_t cd = iconv_open ("ISO-2022-JP//TRANSLIT", "");
++  if (cd == (iconv_t) -1)
++    {
++      puts ("iconv_open failed");
++      return 1;
++    }
++
++  char instr1[] = "\xc2\xa3\xe2\x82\xac\n";
++  const char expstr1[] = "\033$B!r\033(BEUR\n";
++  char outstr[32];
++  size_t inlen = sizeof (instr1);
++  size_t outlen = sizeof (outstr);
++  char *inptr = instr1;
++  char *outptr = outstr;
++  size_t r = iconv (cd, &inptr, &inlen, &outptr, &outlen);
++  if (r != 1
++      || inlen != 0
++      || outlen != sizeof (outstr) - sizeof (expstr1)
++      || memcmp (outstr, expstr1, sizeof (expstr1)) != 0)
++    {
++      puts ("wrong first conversion");
++      return 1;
++    }
++
++  char instr2[] = "\xe3\x88\xb1\n";
++  const char expstr2[] = "(\033$B3t\033(B)\n";
++  inlen = sizeof (instr2);
++  outlen = sizeof (outstr);
++  inptr = instr2;
++  outptr = outstr;
++  r = iconv (cd, &inptr, &inlen, &outptr, &outlen);
++  if (r != 1
++      || inlen != 0
++      || outlen != sizeof (outstr) - sizeof (expstr2)
++      || memcmp (outstr, expstr2, sizeof (expstr2)) != 0)
++    {
++      puts ("wrong second conversion");
++      return 1;
++    }
++
++  if (iconv_close (cd) != 0)
++    {
++      puts ("iconv_close failed");
++      return 1;
++    }
++  return 0;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"

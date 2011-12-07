@@ -1,0 +1,232 @@
+2006-10-27  Ulrich Drepper  <drepper@redhat.com>
+
+	* elf/dl-close.c (_dl_close_worker): Renamed from _dl_close and
+	split out locking and parameter checking.
+	(_dl_close): Call _dl_close_worker after locking and checking.
+	* elf/dl-open.c (_dl_open): Call _dl_close_worker instead of
+	_dl_close.
+	* elf/Makefile: Add rules to build and run tst-thrlock.
+	* elf/tst-thrlock.c:  New file.
+
+	[BZ #3429]
+	* elf/dl-open.c (dl_open_worker): Keep holding dl_load_lock until
+	we are sure we do not need it anymore for _dl_close.  Also move
+	the asserts inside the lock region.
+	Patch mostly by Suzuki <suzuki@in.ibm.com>.
+
+--- libc/elf/Makefile	19 Sep 2006 14:41:41 -0000	1.315
++++ libc/elf/Makefile	27 Oct 2006 21:00:18 -0000	1.316
+@@ -171,7 +171,7 @@ tests += loadtest restest1 preloadtest l
+ 	 tst-dlmopen1 tst-dlmopen2 tst-dlmopen3 \
+ 	 unload3 unload4 unload5 unload6 unload7 tst-global1 order2 \
+ 	 tst-audit1 tst-audit2 \
+-	 tst-stackguard1 tst-addr1
++	 tst-stackguard1 tst-addr1 tst-thrlock
+ #	 reldep9
+ test-srcs = tst-pathopt
+ tests-vis-yes = vismain
+@@ -916,3 +916,5 @@ $(objpfx)tst-leaks1-mem: $(objpfx)tst-le
+ tst-leaks1-ENV = MALLOC_TRACE=$(objpfx)tst-leaks1.mtrace
+ 
+ $(objpfx)tst-addr1: $(libdl)
++
++$(objpfx)tst-thrlock: $(libdl) $(shared-thread-library)
+--- libc/elf/dl-close.c	27 Oct 2006 15:20:17 -0000	1.121
++++ libc/elf/dl-close.c	27 Oct 2006 20:59:37 -0000	1.123
+@@ -107,22 +107,9 @@ remove_slotinfo (size_t idx, struct dtv_
+ 
+ 
+ void
+-_dl_close (void *_map)
++_dl_close_worker (struct link_map *map)
+ {
+-  struct link_map *map = _map;
+   Lmid_t ns = map->l_ns;
+-  unsigned int i;
+-  /* First see whether we can remove the object at all.  */
+-  if (__builtin_expect (map->l_flags_1 & DF_1_NODELETE, 0)
+-      && map->l_init_called)
+-    /* Nope.  Do nothing.  */
+-    return;
+-
+-  if (__builtin_expect (map->l_direct_opencount, 1) == 0)
+-    GLRO(dl_signal_error) (0, map->l_name, NULL, N_("shared object not open"));
+-
+-  /* Acquire the lock.  */
+-  __rtld_lock_lock_recursive (GL(dl_load_lock));
+ 
+   /* One less direct use.  */
+   --map->l_direct_opencount;
+@@ -143,7 +130,6 @@ _dl_close (void *_map)
+ 	_dl_debug_printf ("\nclosing file=%s; direct_opencount=%u\n",
+ 			  map->l_name, map->l_direct_opencount);
+ 
+-      __rtld_lock_unlock_recursive (GL(dl_load_lock));
+       return;
+     }
+ 
+@@ -246,7 +232,7 @@ _dl_close (void *_map)
+ #endif
+   bool unload_any = false;
+   unsigned int first_loaded = ~0;
+-  for (i = 0; i < nloaded; ++i)
++  for (unsigned int i = 0; i < nloaded; ++i)
+     {
+       struct link_map *imap = maps[i];
+ 
+@@ -482,7 +468,7 @@ _dl_close (void *_map)
+ 
+   /* Check each element of the search list to see if all references to
+      it are gone.  */
+-  for (i = first_loaded; i < nloaded; ++i)
++  for (unsigned int i = first_loaded; i < nloaded; ++i)
+     {
+       struct link_map *imap = maps[i];
+       if (!used[i])
+@@ -698,6 +684,30 @@ _dl_close (void *_map)
+     goto retry;
+ 
+   dl_close_state = not_pending;
++}
++
++
++void
++_dl_close (void *_map)
++{
++  struct link_map *map = _map;
++
++  /* First see whether we can remove the object at all.  */
++  if (__builtin_expect (map->l_flags_1 & DF_1_NODELETE, 0))
++    {
++      assert (map->l_init_called);
++      /* Nope.  Do nothing.  */
++      return;
++    }
++
++  if (__builtin_expect (map->l_direct_opencount, 1) == 0)
++    GLRO(dl_signal_error) (0, map->l_name, NULL, N_("shared object not open"));
++
++  /* Acquire the lock.  */
++  __rtld_lock_lock_recursive (GL(dl_load_lock));
++
++  _dl_close_worker (map);
++
+   __rtld_lock_unlock_recursive (GL(dl_load_lock));
+ }
+ 
+--- libc/elf/dl-open.c	27 Oct 2006 15:20:54 -0000	1.132
++++ libc/elf/dl-open.c	27 Oct 2006 20:14:09 -0000	1.134
+@@ -567,15 +567,9 @@ no more namespaces available for dlmopen
+   _dl_unload_cache ();
+ #endif
+ 
+-  /* Release the lock.  */
+-  __rtld_lock_unlock_recursive (GL(dl_load_lock));
+-
++  /* See if an error occurred during loading.  */
+   if (__builtin_expect (errstring != NULL, 0))
+     {
+-      /* Some error occurred during loading.  */
+-      char *local_errstring;
+-      size_t len_errstring;
+-
+       /* Remove the object from memory.  It may be in an inconsistent
+ 	 state if relocation failed, for example.  */
+       if (args.map)
+@@ -592,12 +586,18 @@ no more namespaces available for dlmopen
+ 	    GL(dl_tls_dtv_gaps) = true;
+ #endif
+ 
+-	  _dl_close (args.map);
++	  _dl_close_worker (args.map);
+ 	}
+ 
++      assert (_dl_debug_initialize (0, args.nsid)->r_state == RT_CONSISTENT);
++
++      /* Release the lock.  */
++      __rtld_lock_unlock_recursive (GL(dl_load_lock));
++
+       /* Make a local copy of the error string so that we can release the
+ 	 memory allocated for it.  */
+-      len_errstring = strlen (errstring) + 1;
++      size_t len_errstring = strlen (errstring) + 1;
++      char *local_errstring;
+       if (objname == errstring + len_errstring)
+ 	{
+ 	  size_t total_len = len_errstring + strlen (objname) + 1;
+@@ -614,14 +614,15 @@ no more namespaces available for dlmopen
+       if (malloced)
+ 	free ((char *) errstring);
+ 
+-      assert (_dl_debug_initialize (0, args.nsid)->r_state == RT_CONSISTENT);
+-
+       /* Reraise the error.  */
+       _dl_signal_error (errcode, objname, NULL, local_errstring);
+     }
+ 
+   assert (_dl_debug_initialize (0, args.nsid)->r_state == RT_CONSISTENT);
+ 
++  /* Release the lock.  */
++  __rtld_lock_unlock_recursive (GL(dl_load_lock));
++
+ #ifndef SHARED
+   DL_STATIC_INIT (args.map);
+ #endif
+--- libc/elf/tst-thrlock.c	1 Jan 1970 00:00:00 -0000
++++ libc/elf/tst-thrlock.c	27 Oct 2006 20:58:57 -0000	1.1
+@@ -0,0 +1,55 @@
++#include <dlfcn.h>
++#include <pthread.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <gnu/lib-names.h>
++
++static void *
++tf (void *arg)
++{
++  void *h = dlopen (LIBM_SO, RTLD_LAZY);
++  if (h == NULL)
++    {
++      printf ("dlopen failed: %s\n", dlerror ());
++      exit (1);
++    }
++  if (dlsym (h, "sin") == NULL)
++    {
++      printf ("dlsym failed: %s\n", dlerror ());
++      exit (1);
++    }
++  if (dlclose (h) != 0)
++    {
++      printf ("dlclose failed: %s\n", dlerror ());
++      exit (1);
++    }
++  return NULL;
++}
++
++int
++main (void)
++{
++#define N 10
++  pthread_t th[N];
++  for (int i = 0; i < N; ++i)
++    {
++      int e = pthread_create (&th[i], NULL, tf, NULL);
++      if (e != 0)
++	{
++	  printf ("pthread_create failed with %d (%s)\n", e, strerror (e));
++	  return 1;
++	}
++    }
++  for (int i = 0; i < N; ++i)
++    {
++      void *res;
++      int e = pthread_join (th[i], &res);
++      if (e != 0 || res != NULL)
++	{
++	  puts ("thread failed");
++	  return 1;
++	}
++    }
++  return 0;
++}

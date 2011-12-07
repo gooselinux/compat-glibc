@@ -1,0 +1,92 @@
+2007-10-28  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #5222]
+	* elf/dl-load.c (_dl_rtld_di_serinfo): Correct handling of short
+	path elements in counting mode.
+
+2007-07-11  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #4776]
+	* elf/dl-load.c (_dl_rtld_di_serinfo): Output / in LD_LIBRARY_PATH,
+	RPATH etc. as "/" rather than "", don't segfault on empty paths,
+	instead output ".".
+	* dlfcn/Makefile (distribute): Add glreflib3.c.
+	(module-names): Add glreflib3.
+	($(objpfx)tst-dlinfo.out): Depend on glreflib3.so rather than
+	glreflib1.so.
+	(LDFLAGS_glreflib3.so): New.
+	* dlfcn/tst-dlinfo.c (do_test): Load glreflib3.so instead of
+	glreflib1.so.
+	* dlfcn/glreflib3.c: New file.
+
+--- libc/elf/dl-load.c	30 Jun 2007 17:01:07 -0000	1.286
++++ libc/elf/dl-load.c	12 Jul 2007 18:15:27 -0000	1.289
+@@ -2273,14 +2273,17 @@ _dl_rtld_di_serinfo (struct link_map *lo
+ 	      if (counting)
+ 		{
+ 		  si->dls_cnt++;
+-		  si->dls_size += r->dirnamelen;
++		  si->dls_size += MAX (2, r->dirnamelen);
+ 		}
+ 	      else
+ 		{
+ 		  Dl_serpath *const sp = &si->dls_serpath[idx++];
+ 		  sp->dls_name = allocptr;
+-		  allocptr = __mempcpy (allocptr,
+-					r->dirname, r->dirnamelen - 1);
++		  if (r->dirnamelen < 2)
++		    *allocptr++ = r->dirnamelen ? '/' : '.';
++		  else
++		    allocptr = __mempcpy (allocptr,
++					  r->dirname, r->dirnamelen - 1);
+ 		  *allocptr++ = '\0';
+ 		  sp->dls_flags = flags;
+ 		}
+--- libc/dlfcn/Makefile	28 Oct 2006 06:44:04 -0000	1.42
++++ libc/dlfcn/Makefile	12 Jul 2007 18:16:10 -0000	1.43
+@@ -23,7 +23,8 @@ libdl-routines	:= dlopen dlclose dlsym d
+ 		   dlmopen dlfcn
+ routines	:= $(patsubst %,s%,$(filter-out dlfcn,$(libdl-routines)))
+ elide-routines.os := $(routines)
+-distribute	:= dlopenold.c glreflib1.c glreflib2.c failtestmod.c \
++distribute	:= dlopenold.c glreflib1.c glreflib2.c glreflib3.c \
++		   failtestmod.c \
+ 		   defaultmod1.c defaultmod2.c errmsg1mod.c modatexit.c \
+ 		   modcxaatexit.c modstatic.c modstatic2.c \
+ 		   bug-dlsym1-lib1.c bug-dlsym1-lib2.c bug-atexit1-lib.c \
+@@ -46,8 +47,8 @@ ifeq (yes,$(have-protected))
+ tests += tstatexit
+ endif
+ endif
+-modules-names = glreflib1 glreflib2 failtestmod defaultmod1 defaultmod2 \
+-		errmsg1mod modatexit modcxaatexit \
++modules-names = glreflib1 glreflib2 glreflib3 failtestmod defaultmod1 \
++		defaultmod2 errmsg1mod modatexit modcxaatexit \
+ 		bug-dlsym1-lib1 bug-dlsym1-lib2 bug-atexit1-lib \
+ 		bug-atexit2-lib bug-atexit3-lib
+ 
+@@ -86,7 +87,8 @@ $(objpfx)tst-dladdr: $(libdl)
+ $(objpfx)tst-dladdr.out: $(objpfx)glreflib1.so
+ 
+ $(objpfx)tst-dlinfo: $(libdl)
+-$(objpfx)tst-dlinfo.out: $(objpfx)glreflib1.so
++$(objpfx)tst-dlinfo.out: $(objpfx)glreflib3.so
++LDFLAGS-glreflib3.so = -Wl,-rpath,:
+ 
+ LDFLAGS-default = $(LDFLAGS-rdynamic)
+ $(objpfx)default: $(libdl) $(objpfx)defaultmod1.so $(objpfx)defaultmod2.so
+--- libc/dlfcn/glreflib3.c	1 Jan 1970 00:00:00 -0000
++++ libc/dlfcn/glreflib3.c	12 Jul 2007 18:15:56 -0000	1.1
+@@ -0,0 +1 @@
++#include "glreflib1.c"
+--- libc/dlfcn/tst-dlinfo.c	15 Mar 2003 23:14:48 -0000	1.1
++++ libc/dlfcn/tst-dlinfo.c	12 Jul 2007 18:15:39 -0000	1.2
+@@ -29,7 +29,7 @@ do_test (void)
+ {
+   int status = 0;
+ 
+-  void *handle = dlopen ("glreflib1.so", RTLD_NOW);
++  void *handle = dlopen ("glreflib3.so", RTLD_NOW);
+   if (handle == NULL)
+     error (EXIT_FAILURE, 0, "cannot load: glreflib1.so: %s", dlerror ());
+ 

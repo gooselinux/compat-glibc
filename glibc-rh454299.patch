@@ -1,0 +1,1022 @@
+2007-12-26  Ulrich Drepper  <drepper@redhat.com>
+
+	* nss/nsswitch.c (__nss_lookup): Actually use alternative name in
+	second lookup.
+
+2007-10-29  Ulrich Drepper  <drepper@redhat.com>
+
+	* resolv/Versions [libresolv] (GLIBC_PRIVATE): Add
+	_nss_dns_getnetbyaddr2_r.
+	* resolv/nss_dns/dns-host.c: Define _nss_dns_getnetbyaddr2_r.  Pass
+	extra parameter to getanswer_r.
+	(_nss_dns_getnetbyaddr_r): Now a wrapper around
+	_nss_dns_getnetbyaddr2_r.
+
+	* nscd/Makefile (nscd-modules): Replace gethstbynm2_r with
+	gethstbynm3_r.
+	* nscd/gethstbynm2_r.c: Remove.
+	* nscd/gethstbynm3_r.c: New file.
+	* nscd/aicache.c (addhstaiX): Use __gethostbyaddr2_r instead of
+	__gethostbyaddr_r.
+	* nscd/gethstbyad_r.c: Generate __gethostbyaddr2_r function.  Define
+	__gethostbyaddr_r compatibility wrapper.
+	* nscd/hstcache.c (cache_addhst): Add ttl parameter.  Use it when
+	determining timeout of entry.
+	(lookup): Take new parameter and pass it to __gethostbyname3_r and
+	__gethostbyaddr2_r.
+	(addhstbyX): Pass reference to variable for TTL to lookup and
+	cache_addhst.
+	* nss/Versions [glibc] (GLIBC_PRIVATE): Export __nss_passwd_lookup2,
+	__nss_group_lookup2, __nss_hosts_lookup2, __nss_services_lookup2,
+	and __nss_next2.  Remove __nss_services_lookup.
+	* nss/XXX-lookup.c: Name function now *_lookup2.  Add new parameter.
+	Add compat wrapper.
+	* nss/getXXbyYY_r.c: Changes to call new *_lookup2 functions and
+	__nss_next2.
+	* nss/getXXent_r.c: Likewise.
+	* nss/getnssent_r.c: Likewise.
+	* nss/nsswitch.c (__nss_lookup): Add new parameter.  If first function
+	does not exist in module, try the optional second name.
+	(__nss_next2): New function.
+	(__nss_next): Now wrapper around __nss_next2.
+	* nss/nsswitch.h: Adjust __nss_lookup prototype.
+	Declare __nss_next2.
+	Adjust definition of db_lookup_function type.
+	* nss/service-lookup.c: Define NO_COMPAT.
+	* include/netdb.h: Declare __gethostbyaddr2_r and __gethostbyname3_r.
+	* inet/ether_hton.c: Use __nss_next2 instead of __nss_next.
+	* inet/ether_ntoh.c: Likewise.
+	* sunrpc/netname.c: Likewise.
+	* sunrpc/publickey.c: Likewise.
+	* inet/getnetgrent.c: Likewise.  Adjust calls to __nss_lookup.
+	* inet/gethstbyad_r.c (DB_LOOKUP_FCT): Change to __nss_hosts_lookup2.
+	* inet/gethstbynm2_r.c (DB_LOOKUP_FCT): Likewise.
+	* inet/gethstbynm_r.c (DB_LOOKUP_FCT): Likewise.
+	* inet/gethstent_r.c (DB_LOOKUP_FCT): Likewise.
+
+	* nscd/aicache.c (addhstaiX): Fix default TTL handling.
+
+	* inet/getnetgrent.c (setup): Encrypt static pointer.
+
+--- libc/include/netdb.h	24 Oct 2004 09:04:34 -0000	1.29
++++ libc/include/netdb.h	30 Oct 2007 00:43:16 -0000	1.30
+@@ -62,6 +62,14 @@ extern int __old_gethostbyaddr_r (__cons
+ 				  struct hostent **__restrict __result,
+ 				  int *__restrict __h_errnop);
+ 
++extern int __gethostbyaddr2_r (__const void *__restrict __addr,
++			       socklen_t __len, int __type,
++			       struct hostent *__restrict __result_buf,
++			       char *__restrict __buf, size_t __buflen,
++			       struct hostent **__restrict __result,
++			       int *__restrict __h_errnop,
++			       int32_t *ttlp);
++
+ extern int __gethostbyname_r (__const char *__restrict __name,
+ 			      struct hostent *__restrict __result_buf,
+ 			      char *__restrict __buf, size_t __buflen,
+@@ -84,6 +92,13 @@ extern int __old_gethostbyname2_r (__con
+ 				   struct hostent **__restrict __result,
+ 				   int *__restrict __h_errnop);
+ 
++extern int __gethostbyname3_r (__const char *__restrict __name, int __af,
++			       struct hostent *__restrict __result_buf,
++			       char *__restrict __buf, size_t __buflen,
++			       struct hostent **__restrict __result,
++			       int *__restrict __h_errnop,
++			       int32_t *ttlp, char **canonp);
++
+ extern int __getnetent_r (struct netent *__restrict __result_buf,
+ 			  char *__restrict __buf, size_t __buflen,
+ 			  struct netent **__restrict __result,
+--- libc/inet/ether_hton.c	10 Nov 2002 11:06:35 -0000	1.11
++++ libc/inet/ether_hton.c	30 Oct 2007 00:43:30 -0000	1.12
+@@ -71,7 +71,7 @@ ether_hostton (const char *hostname, str
+ 
+       status = (*fct.f) (hostname, &etherent, buffer, sizeof buffer, &errno);
+ 
+-      no_more = __nss_next (&nip, "gethostton_r", &fct.ptr, status, 0);
++      no_more = __nss_next2 (&nip, "gethostton_r", NULL, &fct.ptr, status, 0);
+     }
+ 
+   if (status == NSS_STATUS_SUCCESS)
+--- libc/inet/ether_ntoh.c	10 Nov 2002 11:06:35 -0000	1.11
++++ libc/inet/ether_ntoh.c	30 Oct 2007 00:43:30 -0000	1.12
+@@ -72,7 +72,7 @@ ether_ntohost (char *hostname, const str
+ 
+       status = (*fct.f) (addr, &etherent, buffer, sizeof buffer, &errno);
+ 
+-      no_more = __nss_next (&nip, "getntohost_r", &fct.ptr, status, 0);
++      no_more = __nss_next2 (&nip, "getntohost_r", NULL, &fct.ptr, status, 0);
+     }
+ 
+   if (status == NSS_STATUS_SUCCESS)
+--- libc/inet/gethstbyad_r.c	6 Aug 2002 04:29:36 -0000	1.10
++++ libc/inet/gethstbyad_r.c	30 Oct 2007 00:43:58 -0000	1.11
+@@ -48,6 +48,6 @@
+     }
+ 
+ /* Special name for the lookup function.  */
+-#define DB_LOOKUP_FCT __nss_hosts_lookup
++#define DB_LOOKUP_FCT __nss_hosts_lookup2
+ 
+ #include "../nss/getXXbyYY_r.c"
+--- libc/inet/gethstbynm2_r.c	3 Aug 2002 06:21:58 -0000	1.6
++++ libc/inet/gethstbynm2_r.c	30 Oct 2007 00:43:58 -0000	1.7
+@@ -41,6 +41,6 @@
+ #define HAVE_AF			1
+ 
+ /* Special name for the lookup function.  */
+-#define DB_LOOKUP_FCT __nss_hosts_lookup
++#define DB_LOOKUP_FCT __nss_hosts_lookup2
+ 
+ #include "../nss/getXXbyYY_r.c"
+--- libc/inet/gethstbynm_r.c	3 Aug 2002 06:21:58 -0000	1.7
++++ libc/inet/gethstbynm_r.c	30 Oct 2007 00:43:58 -0000	1.8
+@@ -40,6 +40,6 @@
+ #define HAVE_LOOKUP_BUFFER	1
+ 
+ /* Special name for the lookup function.  */
+-#define DB_LOOKUP_FCT __nss_hosts_lookup
++#define DB_LOOKUP_FCT __nss_hosts_lookup2
+ 
+ #include "../nss/getXXbyYY_r.c"
+--- libc/inet/gethstent_r.c	3 Aug 2002 06:21:58 -0000	1.5
++++ libc/inet/gethstent_r.c	30 Oct 2007 00:43:58 -0000	1.6
+@@ -30,6 +30,6 @@
+ #define NEED__RES	1
+ 
+ /* Special name for the lookup function.  */
+-#define DB_LOOKUP_FCT __nss_hosts_lookup
++#define DB_LOOKUP_FCT __nss_hosts_lookup2
+ 
+ #include "../nss/getXXent_r.c"
+--- libc/inet/getnetgrent_r.c	25 Sep 2005 22:54:19 -0000	1.30
++++ libc/inet/getnetgrent_r.c	30 Oct 2007 00:44:43 -0000	1.31
+@@ -18,13 +18,16 @@
+    02111-1307 USA.  */
+ 
+ #include <assert.h>
++#include <atomic.h>
+ #include <bits/libc-lock.h>
+ #include <errno.h>
+ #include <netdb.h>
++#include <stdbool.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include "netgroup.h"
+ #include "nsswitch.h"
++#include <sysdep.h>
+ 
+ 
+ /* Protect above variable against multiple uses at the same time.  */
+@@ -44,25 +47,32 @@ static int
+ setup (void **fctp, service_user **nipp)
+ {
+   /* Remember the first service_entry, it's always the same.  */
++  static bool startp_initialized;
+   static service_user *startp;
+   int no_more;
+ 
+-  if (startp == NULL)
++  if (!startp_initialized)
+     {
+       /* Executing this more than once at the same time must yield the
+ 	 same result every time.  So we need no locking.  */
+       no_more = __nss_netgroup_lookup (nipp, "setnetgrent", fctp);
+       startp = no_more ? (service_user *) -1 : *nipp;
++      PTR_MANGLE (startp);
++      atomic_write_barrier ();
++      startp_initialized = true;
+     }
+-  else if (startp == (service_user *) -1)
+-    /* No services at all.  */
+-    return 1;
+   else
+     {
++      service_user *nip = startp;
++      PTR_DEMANGLE (nip);
++      if (nip == (service_user *) -1)
++	/* No services at all.  */
++	return 1;
++
+       /* Reset to the beginning of the service list.  */
+-      *nipp = startp;
++      *nipp = nip;
+       /* Look up the first function.  */
+-      no_more = __nss_lookup (nipp, "setnetgrent", fctp);
++      no_more = __nss_lookup (nipp, "setnetgrent", NULL, fctp);
+     }
+   return no_more;
+ }
+@@ -122,11 +132,12 @@ __internal_setnetgrent_reuse (const char
+     {
+       assert (datap->data == NULL);
+ 
+-      /* Ignore status, we force check in `__nss_next'.  */
++      /* Ignore status, we force check in `__nss_next2'.  */
+       status = (*fct.f) (group, datap);
+ 
+       service_user *old_nip = datap->nip;
+-      no_more = __nss_next (&datap->nip, "setnetgrent", &fct.ptr, status, 0);
++      no_more = __nss_next2 (&datap->nip, "setnetgrent", NULL, &fct.ptr,
++			     status, 0);
+ 
+       if (status == NSS_STATUS_SUCCESS && ! no_more)
+ 	{
+@@ -423,8 +434,8 @@ innetgr (const char *netgroup, const cha
+ 	    break;
+ 
+ 	  /* Look for the next service.  */
+-	  no_more = __nss_next (&entry.nip, "setnetgrent",
+-				&setfct.ptr, status, 0);
++	  no_more = __nss_next2 (&entry.nip, "setnetgrent", NULL,
++				 &setfct.ptr, status, 0);
+ 	}
+ 
+       if (result == 0 && entry.needed_groups != NULL)
+--- libc/nscd/Makefile	22 Aug 2007 03:13:16 -0000	1.53
++++ libc/nscd/Makefile	30 Oct 2007 00:45:48 -0000	1.54
+@@ -31,7 +31,7 @@ include ../Makeconfig
+ vpath %.c ../locale/programs
+ 
+ nscd-modules := nscd connections pwdcache getpwnam_r getpwuid_r grpcache \
+-		getgrnam_r getgrgid_r hstcache gethstbyad_r gethstbynm2_r \
++		getgrnam_r getgrgid_r hstcache gethstbyad_r gethstbynm3_r \
+ 		dbg_log nscd_conf nscd_stat cache mem nscd_setup_thread \
+ 		xmalloc xstrdup aicache initgrcache gai
+ 
+@@ -104,7 +104,7 @@ CFLAGS-getgrnam_r.c += $(nscd-cflags)
+ CFLAGS-getgrgid_r.c += $(nscd-cflags)
+ CFLAGS-hstcache.c += $(nscd-cflags)
+ CFLAGS-gethstbyad_r.c += $(nscd-cflags)
+-CFLAGS-gethstbynm2_r.c += $(nscd-cflags)
++CFLAGS-gethstbynm3_r.c += $(nscd-cflags)
+ CFLAGS-dbg_log.c += $(nscd-cflags)
+ CFLAGS-nscd_conf.c += $(nscd-cflags)
+ CFLAGS-nscd_stat.c += $(nscd-cflags)
+--- libc/nscd/aicache.c	16 Jul 2007 00:54:58 -0000	1.14
++++ libc/nscd/aicache.c	30 Oct 2007 00:46:14 -0000	1.15
+@@ -110,7 +110,7 @@ addhstaiX (struct database_dyn *db, int 
+   size_t tmpbuf4len = 0;
+   char *tmpbuf4 = NULL;
+   char *canon = NULL;
+-  int32_t ttl = UINT32_MAX;
++  int32_t ttl = INT32_MAX;
+   ssize_t total = 0;
+   char *key_copy = NULL;
+   bool alloca_used = false;
+@@ -163,7 +163,7 @@ addhstaiX (struct database_dyn *db, int 
+ 	      rc4 = 0;
+ 	      status[1] = DL_CALL_FCT (fct, (key, AF_INET, &th[1], tmpbuf4,
+ 					     tmpbuf4len, &rc4, &herrno,
+-					     ttl == UINT32_MAX ? &ttl : NULL,
++					     ttl == INT32_MAX ? &ttl : NULL,
+ 					     canon == NULL ? &canon : NULL));
+ 	      if (rc4 != ERANGE || herrno != NETDB_INTERNAL)
+ 		break;
+@@ -233,9 +233,9 @@ addhstaiX (struct database_dyn *db, int 
+ 		      int rc;
+ 		      while (1)
+ 			{
+-			  rc = __gethostbyaddr_r (addr, addrlen, addrfamily,
+-						  &he_mem, tmpbuf, tmpbuflen,
+-						  &he, &herrno);
++			  rc = __gethostbyaddr2_r (addr, addrlen, addrfamily,
++						   &he_mem, tmpbuf, tmpbuflen,
++						   &he, &herrno, NULL);
+ 			  if (rc != ERANGE || herrno != NETDB_INTERNAL)
+ 			    break;
+ 			  tmpbuf = extend_alloca (tmpbuf, tmpbuflen,
+@@ -285,7 +285,8 @@ addhstaiX (struct database_dyn *db, int 
+ 	      dataset->head.usable = true;
+ 
+ 	      /* Compute the timeout time.  */
+-	      dataset->head.timeout = time (NULL) + MIN (db->postimeout, ttl);
++	      dataset->head.timeout = time (NULL) + (ttl == INT32_MAX
++						     ? db->postimeout : ttl);
+ 
+ 	      dataset->resp.version = NSCD_VERSION;
+ 	      dataset->resp.found = 1;
+--- libc/nscd/gethstbyad_r.c	22 Aug 2007 03:14:06 -0000	1.7
++++ libc/nscd/gethstbyad_r.c	30 Oct 2007 00:46:23 -0000	1.8
+@@ -19,11 +19,23 @@
+ 
+ 
+ #define LOOKUP_TYPE	struct hostent
+-#define FUNCTION_NAME	gethostbyaddr
++#define FUNCTION_NAME	gethostbyaddr2
++#define FUNCTION2_NAME	gethostbyaddr
+ #define DATABASE_NAME	hosts
+ #define ADD_PARAMS	const void *addr, socklen_t len, int type
++#define EXTRA_PARAMS	, int32_t *ttlp
+ #define ADD_VARIABLES	addr, len, type
++#define EXTRA_VARIABLES	, ttlp
+ #define NEED_H_ERRNO	1
+ #define NEED__RES	1
+ 
+ #include "../nss/getXXbyYY_r.c"
++
++int
++__gethostbyaddr_r (const void *addr, socklen_t len, int type,
++		   struct hostent *result_buf, char *buf, size_t buflen,
++		   struct hostent **result, int *h_errnop)
++{
++  return __gethostbyaddr2_r (addr, len, type, result_buf, buf, buflen,
++			     result, h_errnop, NULL);
++}
+--- libc/nscd/gethstbynm2_r.c	22 Aug 2007 03:13:48 -0000	1.6
++++ libc/nscd/gethstbynm2_r.c	1 Jan 1970 00:00:00 -0000
+@@ -1,39 +0,0 @@
+-/* Copyright (C) 1996, 1997, 1998, 2000, 2005 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-   Contributed by Ulrich Drepper <drepper@cygnus.com>, 1996.
+-
+-   This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
+-
+-   This program is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-   GNU General Public License for more details.
+-
+-   You should have received a copy of the GNU General Public License
+-   along with this program; if not, write to the Free Software Foundation,
+-   Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+-
+-#include <ctype.h>
+-#include <errno.h>
+-#include <netdb.h>
+-#include <string.h>
+-#include <arpa/inet.h>
+-#include <netinet/in.h>
+-
+-
+-#define LOOKUP_TYPE	struct hostent
+-#define FUNCTION_NAME	gethostbyname2
+-#define DATABASE_NAME	hosts
+-#define ADD_PARAMS	const char *name, int af
+-#define ADD_VARIABLES	name, af
+-#define NEED_H_ERRNO	1
+-
+-#define HANDLE_DIGITS_DOTS	1
+-#define HAVE_LOOKUP_BUFFER	1
+-#define HAVE_AF			1
+-
+-#define __inet_aton inet_aton
+-
+-#include "../nss/getXXbyYY_r.c"
+--- libc/nscd/gethstbynm3_r.c	1 Jan 1970 00:00:00 -0000
++++ libc/nscd/gethstbynm3_r.c	30 Oct 2007 00:45:14 -0000	1.1
+@@ -0,0 +1,52 @@
++/* Copyright (C) 1996-1998, 2000, 2005, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Ulrich Drepper <drepper@cygnus.com>, 1996.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software Foundation,
++   Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
++
++#include <ctype.h>
++#include <errno.h>
++#include <netdb.h>
++#include <string.h>
++#include <arpa/inet.h>
++#include <netinet/in.h>
++
++
++#define LOOKUP_TYPE	struct hostent
++#define FUNCTION_NAME	gethostbyname3
++#define FUNCTION2_NAME	gethostbyname2
++#define DATABASE_NAME	hosts
++#define ADD_PARAMS	const char *name, int af
++#define EXTRA_PARAMS	, int32_t *ttlp, char **canonp
++#define ADD_VARIABLES	name, af
++#define EXTRA_VARIABLES	, ttlp, canonp
++#define NEED_H_ERRNO	1
++
++#define HANDLE_DIGITS_DOTS	1
++#define HAVE_LOOKUP_BUFFER	1
++#define HAVE_AF			1
++
++#define __inet_aton inet_aton
++
++#include "../nss/getXXbyYY_r.c"
++
++
++int
++__gethostbyname2_r (const char *name, int af, struct hostent *ret, char *buf,
++		    size_t buflen, struct hostent **result, int *h_errnop)
++{
++  return __gethostbyname3_r (name, af, ret, buf, buflen, result, h_errnop,
++			     NULL, NULL);
++}
+--- libc/nscd/hstcache.c	22 Aug 2007 03:29:46 -0000	1.44
++++ libc/nscd/hstcache.c	30 Oct 2007 00:46:36 -0000	1.45
+@@ -79,7 +79,8 @@ static const hst_response_header notfoun
+ static void
+ cache_addhst (struct database_dyn *db, int fd, request_header *req,
+ 	      const void *key, struct hostent *hst, uid_t owner,
+-	      struct hashentry *he, struct datahead *dh, int errval)
++	      struct hashentry *he, struct datahead *dh, int errval,
++	      int32_t ttl)
+ {
+   ssize_t total;
+   ssize_t written;
+@@ -130,7 +131,8 @@ cache_addhst (struct database_dyn *db, i
+ 	      dataset->head.usable = true;
+ 
+ 	      /* Compute the timeout time.  */
+-	      dataset->head.timeout = t + db->negtimeout;
++	      dataset->head.timeout = t + (ttl == INT32_MAX
++					   ? db->negtimeout : ttl);
+ 
+ 	      /* This is the reply.  */
+ 	      memcpy (&dataset->resp, &notfound, total);
+@@ -246,7 +248,7 @@ cache_addhst (struct database_dyn *db, i
+       dataset->head.usable = true;
+ 
+       /* Compute the timeout time.  */
+-      dataset->head.timeout = t + db->postimeout;
++      dataset->head.timeout = t + (ttl == INT32_MAX ? db->postimeout : ttl);
+ 
+       dataset->resp.version = NSCD_VERSION;
+       dataset->resp.found = 1;
+@@ -416,19 +418,19 @@ cache_addhst (struct database_dyn *db, i
+ 
+ static int
+ lookup (int type, void *key, struct hostent *resultbufp, char *buffer,
+-	size_t buflen, struct hostent **hst)
++	size_t buflen, struct hostent **hst, int32_t *ttlp)
+ {
+   if (type == GETHOSTBYNAME)
+-    return __gethostbyname2_r (key, AF_INET, resultbufp, buffer, buflen, hst,
+-			       &h_errno);
++    return __gethostbyname3_r (key, AF_INET, resultbufp, buffer, buflen, hst,
++			       &h_errno, ttlp, NULL);
+   if (type == GETHOSTBYNAMEv6)
+-    return __gethostbyname2_r (key, AF_INET6, resultbufp, buffer, buflen, hst,
+-			       &h_errno);
++    return __gethostbyname3_r (key, AF_INET6, resultbufp, buffer, buflen, hst,
++			       &h_errno, ttlp, NULL);
+   if (type == GETHOSTBYADDR)
+-    return __gethostbyaddr_r (key, NS_INADDRSZ, AF_INET, resultbufp, buffer,
+-			      buflen, hst, &h_errno);
+-  return __gethostbyaddr_r (key, NS_IN6ADDRSZ, AF_INET6, resultbufp, buffer,
+-			    buflen, hst, &h_errno);
++    return __gethostbyaddr2_r (key, NS_INADDRSZ, AF_INET, resultbufp, buffer,
++			       buflen, hst, &h_errno, ttlp);
++  return __gethostbyaddr2_r (key, NS_IN6ADDRSZ, AF_INET6, resultbufp, buffer,
++			     buflen, hst, &h_errno, ttlp);
+ }
+ 
+ 
+@@ -446,6 +448,7 @@ addhstbyX (struct database_dyn *db, int 
+   struct hostent *hst;
+   bool use_malloc = false;
+   int errval = 0;
++  int32_t ttl = INT32_MAX;
+ 
+   if (__builtin_expect (debug_level > 0, 0))
+     {
+@@ -472,7 +475,7 @@ addhstbyX (struct database_dyn *db, int 
+     }
+ #endif
+ 
+-  while (lookup (req->type, key, &resultbuf, buffer, buflen, &hst) != 0
++  while (lookup (req->type, key, &resultbuf, buffer, buflen, &hst, &ttl) != 0
+ 	 && h_errno == NETDB_INTERNAL
+ 	 && (errval = errno) == ERANGE)
+     {
+@@ -511,7 +514,7 @@ addhstbyX (struct database_dyn *db, int 
+ #endif
+ 
+   cache_addhst (db, fd, req, key, hst, uid, he, dh,
+-		h_errno == TRY_AGAIN ? errval : 0);
++		h_errno == TRY_AGAIN ? errval : 0, ttl);
+ 
+   if (use_malloc)
+     free (buffer);
+--- libc/nss/Versions	14 Jan 2007 05:21:40 -0000	1.10
++++ libc/nss/Versions	30 Oct 2007 00:46:48 -0000	1.11
+@@ -10,6 +10,9 @@ libc {
+   GLIBC_PRIVATE {
+     _nss_files_parse_grent; _nss_files_parse_pwent; _nss_files_parse_spent;
+     __nss_disable_nscd; __nss_lookup_function;
++
++    __nss_passwd_lookup2; __nss_group_lookup2; __nss_hosts_lookup2;
++    __nss_next2;
+   }
+ }
+ 
+--- libc/nss/XXX-lookup.c	3 Aug 2002 06:25:32 -0000	1.12
++++ libc/nss/XXX-lookup.c	30 Oct 2007 00:46:57 -0000	1.13
+@@ -34,7 +34,8 @@
+ |* 								   *|
+ \*******************************************************************/
+ 
+-#define DB_LOOKUP_FCT CONCAT3_1 (__nss_, DATABASE_NAME, _lookup)
++#define DB_LOOKUP_FCT CONCAT3_1 (__nss_, DATABASE_NAME, _lookup2)
++#define DB_COMPAT_FCT CONCAT3_1 (__nss_, DATABASE_NAME, _lookup)
+ #define CONCAT3_1(Pre, Name, Post) CONCAT3_2 (Pre, Name, Post)
+ #define CONCAT3_2(Pre, Name, Post) Pre##Name##Post
+ 
+@@ -56,12 +57,14 @@
+ service_user *DATABASE_NAME_SYMBOL attribute_hidden;
+ 
+ extern int DB_LOOKUP_FCT (service_user **ni, const char *fct_name,
+-			  void **fctp) internal_function;
++			  const char *fct2_name, void **fctp)
++  internal_function;
+ libc_hidden_proto (DB_LOOKUP_FCT)
+ 
+ int
+ internal_function
+-DB_LOOKUP_FCT (service_user **ni, const char *fct_name, void **fctp)
++DB_LOOKUP_FCT (service_user **ni, const char *fct_name, const char *fct2_name,
++	       void **fctp)
+ {
+   if (DATABASE_NAME_SYMBOL == NULL
+       && __nss_database_lookup (DATABASE_NAME_STRING, ALTERNATE_NAME_STRING,
+@@ -70,6 +73,16 @@ DB_LOOKUP_FCT (service_user **ni, const 
+ 
+   *ni = DATABASE_NAME_SYMBOL;
+ 
+-  return __nss_lookup (ni, fct_name, fctp);
++  return __nss_lookup (ni, fct_name, fct2_name, fctp);
+ }
+ libc_hidden_def (DB_LOOKUP_FCT)
++
++
++#ifndef NO_COMPAT
++int
++internal_function attribute_compat_text_section
++DB_COMPAT_FCT (service_user **ni, const char *fct_name, void **fctp)
++{
++  return DB_LOOKUP_FCT (ni, fct_name, NULL, fctp);
++}
++#endif
+--- libc/nss/getXXbyYY_r.c	15 Oct 2007 23:02:24 -0000	1.63
++++ libc/nss/getXXbyYY_r.c	30 Oct 2007 00:47:26 -0000	1.64
+@@ -41,12 +41,18 @@
+ |* DATABASE_NAME - name of the database the function accesses	   *|
+ |*		   (e.g., host, services, ...)			   *|
+ |*								   *|
+-|* ADD_PARAMS    - additional parameter, can vary in number	   *|
++|* ADD_PARAMS    - additional parameters, can vary in number	   *|
+ |*								   *|
+-|* ADD_VARIABLES - names of additional parameter		   *|
++|* ADD_VARIABLES - names of additional parameters		   *|
+ |*								   *|
+ |* Optionally the following vars can be defined:		   *|
+ |*								   *|
++|* EXTRA_PARAMS  - optional parameters, can vary in number	   *|
++|*								   *|
++|* EXTRA_VARIABLES - names of optional parameter		   *|
++|*								   *|
++|* FUNCTION_NAME - alternative name of the non-reentrant function  *|
++|*								   *|
+ |* NEED_H_ERRNO  - an extra parameter will be passed to point to   *|
+ |*		   the global `h_errno' variable.		   *|
+ |*								   *|
+@@ -61,6 +67,11 @@
+ 
+ /* To make the real sources a bit prettier.  */
+ #define REENTRANT_NAME APPEND_R (FUNCTION_NAME)
++#ifdef FUNCTION2_NAME
++# define REENTRANT2_NAME APPEND_R (FUNCTION2_NAME)
++#else
++# define REENTRANT2_NAME NULL
++#endif
+ #define APPEND_R(name) APPEND_R1 (name)
+ #define APPEND_R1(name) name##_r
+ #define INTERNAL(name) INTERNAL1 (name)
+@@ -79,12 +90,17 @@
+ 
+ #define FUNCTION_NAME_STRING STRINGIZE (FUNCTION_NAME)
+ #define REENTRANT_NAME_STRING STRINGIZE (REENTRANT_NAME)
++#ifdef FUNCTION2_NAME
++# define REENTRANT2_NAME_STRING STRINGIZE (REENTRANT2_NAME)
++#else
++# define REENTRANT2_NAME_STRING NULL
++#endif
+ #define DATABASE_NAME_STRING STRINGIZE (DATABASE_NAME)
+ #define STRINGIZE(name) STRINGIZE1 (name)
+ #define STRINGIZE1(name) #name
+ 
+ #ifndef DB_LOOKUP_FCT
+-# define DB_LOOKUP_FCT CONCAT3_1 (__nss_, DATABASE_NAME, _lookup)
++# define DB_LOOKUP_FCT CONCAT3_1 (__nss_, DATABASE_NAME, _lookup2)
+ # define CONCAT3_1(Pre, Name, Post) CONCAT3_2 (Pre, Name, Post)
+ # define CONCAT3_2(Pre, Name, Post) Pre##Name##Post
+ #endif
+@@ -100,6 +116,13 @@
+ # define H_ERRNO_VAR_P NULL
+ #endif
+ 
++#ifndef EXTRA_PARAMS
++# define EXTRA_PARAMS
++#endif
++#ifndef EXTRA_VARIABLES
++# define EXTRA_VARIABLES
++#endif
++
+ #ifdef HAVE_AF
+ # define AF_VAL af
+ #else
+@@ -108,17 +131,20 @@
+ 
+ /* Type of the lookup function we need here.  */
+ typedef enum nss_status (*lookup_function) (ADD_PARAMS, LOOKUP_TYPE *, char *,
+-					    size_t, int * H_ERRNO_PARM);
++					    size_t, int * H_ERRNO_PARM
++					    EXTRA_PARAMS);
+ 
+ /* The lookup function for the first entry of this service.  */
+-extern int DB_LOOKUP_FCT (service_user **nip, const char *name, void **fctp)
++extern int DB_LOOKUP_FCT (service_user **nip, const char *name,
++			  const char *name2, void **fctp)
+      internal_function;
+ libc_hidden_proto (DB_LOOKUP_FCT)
+ 
+ 
+ int
+ INTERNAL (REENTRANT_NAME) (ADD_PARAMS, LOOKUP_TYPE *resbuf, char *buffer,
+-			   size_t buflen, LOOKUP_TYPE **result H_ERRNO_PARM)
++			   size_t buflen, LOOKUP_TYPE **result H_ERRNO_PARM
++			   EXTRA_PARAMS)
+ {
+   static service_user *startp;
+   static lookup_function start_fct;
+@@ -169,7 +195,8 @@ INTERNAL (REENTRANT_NAME) (ADD_PARAMS, L
+ 
+   if (startp == NULL)
+     {
+-      no_more = DB_LOOKUP_FCT (&nip, REENTRANT_NAME_STRING, &fct.ptr);
++      no_more = DB_LOOKUP_FCT (&nip, REENTRANT_NAME_STRING,
++			       REENTRANT2_NAME_STRING, &fct.ptr);
+       if (no_more)
+ 	startp = (service_user *) -1l;
+       else
+@@ -208,7 +235,7 @@ INTERNAL (REENTRANT_NAME) (ADD_PARAMS, L
+ #endif
+ 
+       status = DL_CALL_FCT (fct.l, (ADD_VARIABLES, resbuf, buffer, buflen,
+-				    &errno H_ERRNO_VAR));
++				    &errno H_ERRNO_VAR EXTRA_VARIABLES));
+ 
+       /* The status is NSS_STATUS_TRYAGAIN and errno is ERANGE the
+ 	 provided buffer is too small.  In this case we should give
+@@ -222,8 +249,8 @@ INTERNAL (REENTRANT_NAME) (ADD_PARAMS, L
+ 	  && errno == ERANGE)
+ 	break;
+ 
+-      no_more = __nss_next (&nip, REENTRANT_NAME_STRING,
+-			    &fct.ptr, status, 0);
++      no_more = __nss_next2 (&nip, REENTRANT_NAME_STRING,
++			     REENTRANT2_NAME_STRING, &fct.ptr, status, 0);
+     }
+ 
+ #ifdef HANDLE_DIGITS_DOTS
+@@ -258,10 +285,11 @@ done:
+ }
+ 
+ 
+-#include <shlib-compat.h>
+-#if SHLIB_COMPAT (libc, GLIBC_2_0, GLIBC_2_1_2)
+-#define OLD(name) OLD1 (name)
+-#define OLD1(name) __old_##name
++#ifndef FUNCTION2_NAME
++# include <shlib-compat.h>
++# if SHLIB_COMPAT (libc, GLIBC_2_0, GLIBC_2_1_2)
++#  define OLD(name) OLD1 (name)
++#  define OLD1(name) __old_##name
+ 
+ int
+ attribute_compat_text_section
+@@ -277,19 +305,20 @@ OLD (REENTRANT_NAME) (ADD_PARAMS, LOOKUP
+   return ret;
+ }
+ 
+-#define do_symbol_version(real, name, version) \
++#  define do_symbol_version(real, name, version) \
+   compat_symbol (libc, real, name, version)
+ do_symbol_version (OLD (REENTRANT_NAME), REENTRANT_NAME, GLIBC_2_0);
+-#endif
++# endif
+ 
+ /* As INTERNAL (REENTRANT_NAME) may be hidden, we need an alias
+    in between so that the REENTRANT_NAME@@GLIBC_2.1.2 is not
+    hidden too.  */
+ strong_alias (INTERNAL (REENTRANT_NAME), NEW (REENTRANT_NAME));
+ 
+-#define do_default_symbol_version(real, name, version) \
++# define do_default_symbol_version(real, name, version) \
+   versioned_symbol (libc, real, name, version)
+ do_default_symbol_version (NEW (REENTRANT_NAME),
+ 			   REENTRANT_NAME, GLIBC_2_1_2);
++#endif
+ 
+ static_link_warning (REENTRANT_NAME)
+--- libc/nss/getXXent_r.c	10 Mar 2004 09:28:25 -0000	1.40
++++ libc/nss/getXXent_r.c	30 Oct 2007 00:47:26 -0000	1.41
+@@ -64,7 +64,7 @@
+ #define STRINGIZE1(Name) #Name
+ 
+ #ifndef DB_LOOKUP_FCT
+-# define DB_LOOKUP_FCT CONCAT3_1 (__nss_, DATABASE_NAME, _lookup)
++# define DB_LOOKUP_FCT CONCAT3_1 (__nss_, DATABASE_NAME, _lookup2)
+ # define CONCAT3_1(Pre, Name, Post) CONCAT3_2 (Pre, Name, Post)
+ # define CONCAT3_2(Pre, Name, Post) Pre##Name##Post
+ #endif
+@@ -113,7 +113,8 @@ static STAYOPEN_TMP;
+ __libc_lock_define_initialized (static, lock)
+ 
+ /* The lookup function for the first entry of this service.  */
+-extern int DB_LOOKUP_FCT (service_user **nip, const char *name, void **fctp)
++extern int DB_LOOKUP_FCT (service_user **nip, const char *name,
++			  const char *name2, void **fctp)
+      internal_function;
+ libc_hidden_proto (DB_LOOKUP_FCT)
+ 
+--- libc/nss/getnssent_r.c	5 Aug 2004 23:32:09 -0000	1.6
++++ libc/nss/getnssent_r.c	30 Oct 2007 00:47:26 -0000	1.7
+@@ -30,7 +30,7 @@ setup (const char *func_name, db_lookup_
+   int no_more;
+   if (*startp == NULL)
+     {
+-      no_more = lookup_fct (nip, func_name, fctp);
++      no_more = lookup_fct (nip, func_name, NULL, fctp);
+       *startp = no_more ? (service_user *) -1l : *nip;
+     }
+   else if (*startp == (service_user *) -1l)
+@@ -42,7 +42,7 @@ setup (const char *func_name, db_lookup_
+ 	/* Reset to the beginning of the service list.  */
+ 	*nip = *startp;
+       /* Look up the first function.  */
+-      no_more = __nss_lookup (nip, func_name, fctp);
++      no_more = __nss_lookup (nip, func_name, NULL, fctp);
+     }
+   return no_more;
+ }
+@@ -80,8 +80,7 @@ __nss_setent (const char *func_name, db_
+       else
+ 	status = DL_CALL_FCT (fct.f, (0));
+ 
+-      no_more = __nss_next (nip, func_name, &fct.ptr,
+-			    status, 0);
++      no_more = __nss_next2 (nip, func_name, NULL, &fct.ptr, status, 0);
+       if (is_last_nip)
+ 	*last_nip = *nip;
+     }
+@@ -120,7 +119,7 @@ __nss_endent (const char *func_name, db_
+ 	/* We have processed all services which were used.  */
+ 	break;
+ 
+-      no_more = __nss_next (nip, func_name, &fct.ptr, 0, 1);
++      no_more = __nss_next2 (nip, func_name, NULL, &fct.ptr, 0, 1);
+     }
+   *last_nip = *nip = NULL;
+ }
+@@ -177,8 +176,8 @@ __nss_getent_r (const char *getent_func_
+ 
+       do
+ 	{
+-	  no_more = __nss_next (nip, getent_func_name, &fct.ptr,
+-				status, 0);
++	  no_more = __nss_next2 (nip, getent_func_name, NULL, &fct.ptr,
++				 status, 0);
+ 
+ 	  if (is_last_nip)
+ 	    *last_nip = *nip;
+@@ -192,8 +191,7 @@ __nss_getent_r (const char *getent_func_
+ 		void *ptr;
+ 	      } sfct;
+ 
+-	      no_more = __nss_lookup (nip, setent_func_name,
+-				      &sfct.ptr);
++	      no_more = __nss_lookup (nip, setent_func_name, NULL, &sfct.ptr);
+ 
+ 	      if (! no_more)
+ 	        {
+--- libc/nss/nsswitch.c	28 Jul 2007 20:32:31 -0000	1.65
++++ libc/nss/nsswitch.c	26 Dec 2007 23:54:31 -0000	1.67
+@@ -145,9 +145,12 @@ libc_hidden_def (__nss_database_lookup)
+     0 == function found
+     1 == finished */
+ int
+-__nss_lookup (service_user **ni, const char *fct_name, void **fctp)
++__nss_lookup (service_user **ni, const char *fct_name, const char *fct2_name,
++	      void **fctp)
+ {
+   *fctp = __nss_lookup_function (*ni, fct_name);
++  if (*fctp == NULL && fct2_name != NULL)
++    *fctp = __nss_lookup_function (*ni, fct2_name);
+ 
+   while (*fctp == NULL
+ 	 && nss_next_action (*ni, NSS_STATUS_UNAVAIL) == NSS_ACTION_CONTINUE
+@@ -156,6 +159,8 @@ __nss_lookup (service_user **ni, const c
+       *ni = (*ni)->next;
+ 
+       *fctp = __nss_lookup_function (*ni, fct_name);
++      if (*fctp == NULL && fct2_name != NULL)
++	*fctp = __nss_lookup_function (*ni, fct2_name);
+     }
+ 
+   return *fctp != NULL ? 0 : (*ni)->next == NULL ? 1 : -1;
+@@ -166,8 +171,8 @@ __nss_lookup (service_user **ni, const c
+     0 == adjusted for next function
+     1 == finished */
+ int
+-__nss_next (service_user **ni, const char *fct_name, void **fctp, int status,
+-	    int all_values)
++__nss_next2 (service_user **ni, const char *fct_name, const char *fct2_name,
++	     void **fctp, int status, int all_values)
+ {
+   if (all_values)
+     {
+@@ -180,7 +185,8 @@ __nss_next (service_user **ni, const cha
+   else
+     {
+       /* This is really only for debugging.  */
+-       if (NSS_STATUS_TRYAGAIN > status || status > NSS_STATUS_RETURN)
++      if (__builtin_expect (NSS_STATUS_TRYAGAIN > status
++			    || status > NSS_STATUS_RETURN, 0))
+ 	 __libc_fatal ("illegal status in __nss_next");
+ 
+        if (nss_next_action (*ni, status) == NSS_ACTION_RETURN)
+@@ -195,6 +201,8 @@ __nss_next (service_user **ni, const cha
+       *ni = (*ni)->next;
+ 
+       *fctp = __nss_lookup_function (*ni, fct_name);
++      if (*fctp == NULL && fct2_name != NULL)
++	*fctp = __nss_lookup_function (*ni, fct2_name);
+     }
+   while (*fctp == NULL
+ 	 && nss_next_action (*ni, NSS_STATUS_UNAVAIL) == NSS_ACTION_CONTINUE
+@@ -202,7 +210,16 @@ __nss_next (service_user **ni, const cha
+ 
+   return *fctp != NULL ? 0 : -1;
+ }
+-libc_hidden_def (__nss_next)
++libc_hidden_def (__nss_next2)
++
++
++int
++attribute_compat_text_section
++__nss_next (service_user **ni, const char *fct_name, void **fctp, int status,
++	    int all_values)
++{
++  return __nss_next2 (ni, fct_name, NULL, fctp, status, all_values);
++}
+ 
+ 
+ int
+--- libc/nss/nsswitch.h	28 Jul 2007 20:32:41 -0000	1.23
++++ libc/nss/nsswitch.h	30 Oct 2007 00:47:51 -0000	1.24
+@@ -110,7 +110,8 @@ libc_hidden_proto (__nss_database_lookup
+ /* Put first function with name FCT_NAME for SERVICE in FCTP.  The
+    position is remembered in NI.  The function returns a value < 0 if
+    an error occurred or no such function exists.  */
+-extern int __nss_lookup (service_user **ni, const char *fct_name, void **fctp);
++extern int __nss_lookup (service_user **ni, const char *fct_name,
++			 const char *fct2_name, void **fctp) attribute_hidden;
+ 
+ /* Determine the next step in the lookup process according to the
+    result STATUS of the call to the last function returned by
+@@ -125,9 +126,12 @@ extern int __nss_lookup (service_user **
+    services.  In other words, only if all four lookup results have
+    the action RETURN associated the lookup process stops before the
+    natural end.  */
++extern int __nss_next2 (service_user **ni, const char *fct_name,
++			const char *fct2_name, void **fctp, int status,
++			int all_values) attribute_hidden;
++libc_hidden_proto (__nss_next2)
+ extern int __nss_next (service_user **ni, const char *fct_name, void **fctp,
+ 		       int status, int all_values);
+-libc_hidden_proto (__nss_next)
+ 
+ /* Search for the service described in NI for a function named FCT_NAME
+    and return a pointer to this function if successful.  */
+@@ -139,7 +143,8 @@ libc_hidden_proto (__nss_lookup_function
+ extern void __nss_disable_nscd (void);
+ 
+ 
+-typedef int (*db_lookup_function) (service_user **, const char *, void **)
++typedef int (*db_lookup_function) (service_user **, const char *, const char *,
++				   void **)
+      internal_function;
+ typedef enum nss_status (*setent_function) (int);
+ typedef enum nss_status (*endent_function) (void);
+--- libc/nss/service-lookup.c	6 Jul 2001 04:55:37 -0000	1.3
++++ libc/nss/service-lookup.c	30 Oct 2007 00:48:02 -0000	1.4
+@@ -18,5 +18,6 @@
+    02111-1307 USA.  */
+ 
+ #define DATABASE_NAME services
++#define NO_COMPAT
+ 
+ #include "XXX-lookup.c"
+--- libc/resolv/Versions	27 Oct 2006 23:11:44 -0000	1.22
++++ libc/resolv/Versions	30 Oct 2007 00:56:55 -0000	1.23
+@@ -88,6 +88,7 @@ libnss_dns {
+     _nss_dns_gethostbyname3_r;
+     _nss_dns_gethostbyname_r; _nss_dns_getnetbyaddr_r;
+     _nss_dns_getnetbyname_r; _nss_dns_getcanonname_r;
++    _nss_dns_gethostbyaddr2_r;
+   }
+ }
+ 
+--- libc/resolv/nss_dns/dns-host.c	15 Oct 2007 16:30:01 -0000	1.45
++++ libc/resolv/nss_dns/dns-host.c	30 Oct 2007 00:57:56 -0000	1.46
+@@ -255,10 +255,18 @@ _nss_dns_gethostbyname_r (const char *na
+ }
+ 
+ 
++extern enum nss_status _nss_dns_gethostbyaddr2_r (const void *addr,
++						  socklen_t len, int af,
++						  struct hostent *result,
++						  char *buffer, size_t buflen,
++						  int *errnop, int *h_errnop,
++						  int32_t *ttlp);
++hidden_proto (_nss_dns_gethostbyaddr2_r)
++
+ enum nss_status
+-_nss_dns_gethostbyaddr_r (const void *addr, socklen_t len, int af,
+-			  struct hostent *result, char *buffer, size_t buflen,
+-			  int *errnop, int *h_errnop)
++_nss_dns_gethostbyaddr2_r (const void *addr, socklen_t len, int af,
++			   struct hostent *result, char *buffer, size_t buflen,
++			   int *errnop, int *h_errnop, int32_t *ttlp)
+ {
+   static const u_char mapped[] = { 0,0, 0,0, 0,0, 0,0, 0,0, 0xff,0xff };
+   static const u_char tunnelled[] = { 0,0, 0,0, 0,0, 0,0, 0,0, 0,0 };
+@@ -374,7 +382,7 @@ _nss_dns_gethostbyaddr_r (const void *ad
+ 
+  got_it_already:
+   status = getanswer_r (host_buffer.buf, n, qbuf, T_PTR, result, buffer, buflen,
+-			errnop, h_errnop, 0 /* XXX */, NULL, NULL);
++			errnop, h_errnop, 0 /* XXX */, ttlp, NULL);
+   if (host_buffer.buf != orig_host_buffer)
+     free (host_buffer.buf);
+   if (status != NSS_STATUS_SUCCESS)
+@@ -408,6 +416,17 @@ _nss_dns_gethostbyaddr_r (const void *ad
+   *h_errnop = NETDB_SUCCESS;
+   return NSS_STATUS_SUCCESS;
+ }
++hidden_def (_nss_dns_gethostbyaddr2_r)
++
++
++enum nss_status
++_nss_dns_gethostbyaddr_r (const void *addr, socklen_t len, int af,
++			  struct hostent *result, char *buffer, size_t buflen,
++			  int *errnop, int *h_errnop)
++{
++  return _nss_dns_gethostbyaddr2_r (addr, len, af, result, buffer, buflen,
++				    errnop, h_errnop, NULL);
++}
+ 
+ #ifdef RESOLVSORT
+ static void addrsort (char **ap, int num);
+--- libc/sunrpc/netname.c	10 Nov 2002 11:06:35 -0000	1.9
++++ libc/sunrpc/netname.c	30 Oct 2007 00:43:30 -0000	1.10
+@@ -176,7 +176,7 @@ netname2user (const char netname[MAXNETN
+     {
+       status = (*fct.f) (netname, uidp, gidp, gidlenp, gidlist);
+ 
+-      no_more = __nss_next (&nip, "netname2user", &fct.ptr, status, 0);
++      no_more = __nss_next2 (&nip, "netname2user", NULL, &fct.ptr, status, 0);
+     }
+ 
+   return status == NSS_STATUS_SUCCESS;
+--- libc/sunrpc/publickey.c	10 Nov 2002 11:06:35 -0000	1.10
++++ libc/sunrpc/publickey.c	30 Oct 2007 00:43:30 -0000	1.11
+@@ -71,7 +71,7 @@ getpublickey (const char *name, char *ke
+     {
+       status = (*fct.f) (name, key, &errno);
+ 
+-      no_more = __nss_next (&nip, "getpublickey", &fct.ptr, status, 0);
++      no_more = __nss_next2 (&nip, "getpublickey", NULL, &fct.ptr, status, 0);
+     }
+ 
+   return status == NSS_STATUS_SUCCESS;
+@@ -114,7 +114,7 @@ getsecretkey (const char *name, char *ke
+     {
+       status = (*fct.f) (name, key, passwd, &errno);
+ 
+-      no_more = __nss_next (&nip, "getsecretkey", &fct.ptr, status, 0);
++      no_more = __nss_next2 (&nip, "getsecretkey", NULL, &fct.ptr, status, 0);
+     }
+ 
+   return status == NSS_STATUS_SUCCESS;

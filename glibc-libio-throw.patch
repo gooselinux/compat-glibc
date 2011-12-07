@@ -1,0 +1,548 @@
+2007-03-30  Jakub Jelinek  <jakub@redhat.com>
+
+	* libio/libio.h (__underflow, __uflow, __overflow, __wunderflow,
+	__wuflow, __woverflow, _IO_getc, _IO_putc, _IO_peekc_locked, _IO_padn,
+	_IO_sgetn, _IO_seekoff, _IO_seekpos, _IO_getwc, _IO_putwc, _IO_wpadn):
+	Remove __THROW.
+	* libio/fileops.c (new_do_write, _IO_file_xsgetn_mmap,
+	_IO_file_xsgetn_maybe_mmap): Likewise.
+	* libio/oldfileops.c (old_do_write): Likewise.
+	* libio/libioP.h (_IO_switch_to_get_mode, _IO_switch_to_wget_mode,
+	_IO_init_marker, _IO_init_wmarker, _IO_default_uflow,
+	_IO_wdefault_uflow, _IO_default_setbuf, _IO_default_seekpos,
+	_IO_do_write, _IO_new_do_write, _IO_old_do_write, _IO_wdo_write,
+	_IO_flush_all_lockp, _IO_flush_all, _IO_cleanup,
+	_IO_flush_all_linebuffered, _IO_new_fgetpos, _IO_old_fgetpos,
+	_IO_new_fsetpos, _IO_old_fsetpos, _IO_new_fgetpos64,
+	_IO_old_fgetpos64, _IO_new_fsetpos64, _IO_old_fsetpos64,
+	_IO_file_setbuf, _IO_file_seekoff, _IO_file_xsputn, _IO_file_xsgetn,
+	_IO_file_underflow, _IO_file_underflow_mmap,
+	_IO_file_underflow_maybe_mmap, _IO_file_overflow, _IO_file_attach,
+	_IO_file_open, _IO_file_fopen, _IO_file_write, _IO_file_read,
+	_IO_file_sync, _IO_file_close_it, _IO_file_finish,
+	_IO_new_file_attach, _IO_new_file_close_it, _IO_new_file_finish,
+	_IO_new_file_fopen, _IO_new_file_setbuf, _IO_file_setbuf_mmap,
+	_IO_new_file_sync, _IO_new_file_underflow, _IO_new_file_overflow,
+	_IO_new_file_seekoff, _IO_new_file_write, _IO_new_file_xsputn,
+	_IO_old_file_setbuf, _IO_old_file_seekoff, _IO_old_file_xsputn,
+	_IO_old_file_underflow, _IO_old_file_overflow, _IO_old_file_attach,
+	_IO_old_file_fopen, _IO_old_file_write, _IO_old_file_sync,
+	_IO_old_file_close_it, _IO_old_file_finish, _IO_wfile_xsputn,
+	_IO_wfile_setbuf, _IO_wfile_sync, _IO_wfile_underflow,
+	_IO_wfile_overflow, _IO_wfile_seekoff, _IO_old_proc_open,
+	_IO_old_proc_close, _IO_getdelim, _IO_flush_all_internal,
+	_IO_adjust_column_internal, _IO_default_uflow_internal,
+	_IO_default_xsgetn_internal, _IO_wdefault_xsputn_internal,
+	_IO_wdefault_xsgetn_internal, _IO_wdefault_uflow_internal,
+	_IO_file_setbuf_internal, _IO_file_seekoff_internal,
+	_IO_file_xsputn_internal, _IO_file_xsgetn_internal,
+	_IO_file_close_it_internal, _IO_file_underflow_internal,
+	_IO_file_overflow_internal, _IO_file_attach_internal,
+	_IO_file_fopen_internal, _IO_file_sync_internal,
+	_IO_file_finish_internal, _IO_wfile_xsputn_internal,
+	_IO_wfile_seekoff_internal, _IO_wfile_sync_internal,
+	_IO_switch_to_wget_mode_internal, _IO_padn_internal,
+	_IO_switch_to_get_mode_internal, _IO_seekoff_unlocked,
+	_IO_seekpos_unlocked): Likewise.
+	(_IO_strtod, _IO_dtoa, _IO_outfloat, _IO_read, _IO_write,
+	_IO_lseek, _IO_close, _IO_fstat): Remove unused prototypes.
+
+--- libc/libio/fileops.c	13 Dec 2006 23:16:54 -0000	1.111
++++ libc/libio/fileops.c	16 Apr 2007 23:14:25 -0000	1.112
+@@ -472,7 +473,7 @@ _IO_file_setbuf_mmap (fp, p, len)
+   return result;
+ }
+ 
+-static _IO_size_t new_do_write (_IO_FILE *, const char *, _IO_size_t) __THROW;
++static _IO_size_t new_do_write (_IO_FILE *, const char *, _IO_size_t);
+ 
+ /* Write TO_DO bytes from DATA to FP.
+    Then mark FP as having empty buffers. */
+@@ -1468,8 +1469,7 @@ _IO_file_xsgetn (fp, data, n)
+ }
+ INTDEF(_IO_file_xsgetn)
+ 
+-static _IO_size_t _IO_file_xsgetn_mmap (_IO_FILE *, void *, _IO_size_t)
+-     __THROW;
++static _IO_size_t _IO_file_xsgetn_mmap (_IO_FILE *, void *, _IO_size_t);
+ static _IO_size_t
+ _IO_file_xsgetn_mmap (fp, data, n)
+      _IO_FILE *fp;
+@@ -1528,8 +1528,7 @@ _IO_file_xsgetn_mmap (fp, data, n)
+   return s - (char *) data;
+ }
+ 
+-static _IO_size_t _IO_file_xsgetn_maybe_mmap (_IO_FILE *, void *, _IO_size_t)
+-     __THROW;
++static _IO_size_t _IO_file_xsgetn_maybe_mmap (_IO_FILE *, void *, _IO_size_t);
+ static _IO_size_t
+ _IO_file_xsgetn_maybe_mmap (fp, data, n)
+      _IO_FILE *fp;
+--- libc/libio/libio.h	13 Dec 2006 23:15:31 -0000	1.65
++++ libc/libio/libio.h	16 Apr 2007 23:14:04 -0000	1.66
+@@ -410,12 +410,12 @@ extern void _IO_cookie_init (struct _IO_
+ extern "C" {
+ #endif
+ 
+-extern int __underflow (_IO_FILE *) __THROW;
+-extern int __uflow (_IO_FILE *) __THROW;
+-extern int __overflow (_IO_FILE *, int) __THROW;
+-extern _IO_wint_t __wunderflow (_IO_FILE *) __THROW;
+-extern _IO_wint_t __wuflow (_IO_FILE *) __THROW;
+-extern _IO_wint_t __woverflow (_IO_FILE *, _IO_wint_t) __THROW;
++extern int __underflow (_IO_FILE *);
++extern int __uflow (_IO_FILE *);
++extern int __overflow (_IO_FILE *, int);
++extern _IO_wint_t __wunderflow (_IO_FILE *);
++extern _IO_wint_t __wuflow (_IO_FILE *);
++extern _IO_wint_t __woverflow (_IO_FILE *, _IO_wint_t);
+ 
+ #if  __GNUC__ >= 3
+ # define _IO_BE(expr, res) __builtin_expect ((expr), res)
+@@ -448,12 +448,12 @@ extern _IO_wint_t __woverflow (_IO_FILE 
+ #define _IO_feof_unlocked(__fp) (((__fp)->_flags & _IO_EOF_SEEN) != 0)
+ #define _IO_ferror_unlocked(__fp) (((__fp)->_flags & _IO_ERR_SEEN) != 0)
+ 
+-extern int _IO_getc (_IO_FILE *__fp) __THROW;
+-extern int _IO_putc (int __c, _IO_FILE *__fp) __THROW;
++extern int _IO_getc (_IO_FILE *__fp);
++extern int _IO_putc (int __c, _IO_FILE *__fp);
+ extern int _IO_feof (_IO_FILE *__fp) __THROW;
+ extern int _IO_ferror (_IO_FILE *__fp) __THROW;
+ 
+-extern int _IO_peekc_locked (_IO_FILE *__fp) __THROW;
++extern int _IO_peekc_locked (_IO_FILE *__fp);
+ 
+ /* This one is for Emacs. */
+ #define _IO_PENDING_OUTPUT_COUNT(_fp)	\
+@@ -482,17 +482,17 @@ extern int _IO_vfscanf (_IO_FILE * __res
+ 			_IO_va_list, int *__restrict);
+ extern int _IO_vfprintf (_IO_FILE *__restrict, const char *__restrict,
+ 			 _IO_va_list);
+-extern _IO_ssize_t _IO_padn (_IO_FILE *, int, _IO_ssize_t) __THROW;
+-extern _IO_size_t _IO_sgetn (_IO_FILE *, void *, _IO_size_t) __THROW;
++extern _IO_ssize_t _IO_padn (_IO_FILE *, int, _IO_ssize_t);
++extern _IO_size_t _IO_sgetn (_IO_FILE *, void *, _IO_size_t);
+ 
+-extern _IO_off64_t _IO_seekoff (_IO_FILE *, _IO_off64_t, int, int) __THROW;
+-extern _IO_off64_t _IO_seekpos (_IO_FILE *, _IO_off64_t, int) __THROW;
++extern _IO_off64_t _IO_seekoff (_IO_FILE *, _IO_off64_t, int, int);
++extern _IO_off64_t _IO_seekpos (_IO_FILE *, _IO_off64_t, int);
+ 
+ extern void _IO_free_backup_area (_IO_FILE *) __THROW;
+ 
+ #if defined _LIBC || defined _GLIBCPP_USE_WCHAR_T
+-extern _IO_wint_t _IO_getwc (_IO_FILE *__fp) __THROW;
+-extern _IO_wint_t _IO_putwc (wchar_t __wc, _IO_FILE *__fp) __THROW;
++extern _IO_wint_t _IO_getwc (_IO_FILE *__fp);
++extern _IO_wint_t _IO_putwc (wchar_t __wc, _IO_FILE *__fp);
+ extern int _IO_fwide (_IO_FILE *__fp, int __mode) __THROW;
+ # if __GNUC__ >= 2
+ /* While compiling glibc we have to handle compatibility with very old
+@@ -531,7 +531,7 @@ extern int _IO_vfwscanf (_IO_FILE * __re
+ 			 _IO_va_list, int *__restrict);
+ extern int _IO_vfwprintf (_IO_FILE *__restrict, const wchar_t *__restrict,
+ 			  _IO_va_list);
+-extern _IO_ssize_t _IO_wpadn (_IO_FILE *, wint_t, _IO_ssize_t) __THROW;
++extern _IO_ssize_t _IO_wpadn (_IO_FILE *, wint_t, _IO_ssize_t);
+ extern void _IO_free_wbackup_area (_IO_FILE *) __THROW;
+ #endif
+ 
+--- libc/libio/libioP.h	14 Jan 2006 12:09:46 -0000	1.76
++++ libc/libio/libioP.h	16 Apr 2007 23:15:21 -0000	1.77
+@@ -380,7 +380,7 @@ typedef struct _IO_FILE *_IO_ITER;
+ 
+ extern void _IO_switch_to_main_get_area (_IO_FILE *) __THROW;
+ extern void _IO_switch_to_backup_area (_IO_FILE *) __THROW;
+-extern int _IO_switch_to_get_mode (_IO_FILE *) __THROW;
++extern int _IO_switch_to_get_mode (_IO_FILE *);
+ extern void _IO_init (_IO_FILE *, int) __THROW;
+ extern int _IO_sputbackc (_IO_FILE *, int) __THROW;
+ extern int _IO_sungetc (_IO_FILE *) __THROW;
+@@ -394,7 +394,7 @@ extern unsigned _IO_adjust_column (unsig
+ 
+ extern void _IO_switch_to_main_wget_area (_IO_FILE *) __THROW;
+ extern void _IO_switch_to_wbackup_area (_IO_FILE *) __THROW;
+-extern int _IO_switch_to_wget_mode (_IO_FILE *) __THROW;
++extern int _IO_switch_to_wget_mode (_IO_FILE *);
+ extern void _IO_wsetb (_IO_FILE *, wchar_t *, wchar_t *, int) __THROW;
+ extern wint_t _IO_sputbackwc (_IO_FILE *, wint_t) __THROW;
+ extern wint_t _IO_sungetwc (_IO_FILE *) __THROW;
+@@ -404,8 +404,8 @@ extern unsigned _IO_adjust_wcolumn (unsi
+ 
+ /* Marker-related function. */
+ 
+-extern void _IO_init_marker (struct _IO_marker *, _IO_FILE *) __THROW;
+-extern void _IO_init_wmarker (struct _IO_marker *, _IO_FILE *) __THROW;
++extern void _IO_init_marker (struct _IO_marker *, _IO_FILE *);
++extern void _IO_init_wmarker (struct _IO_marker *, _IO_FILE *);
+ extern void _IO_remove_marker (struct _IO_marker *) __THROW;
+ extern int _IO_marker_difference (struct _IO_marker *, struct _IO_marker *)
+      __THROW;
+@@ -434,22 +434,22 @@ libc_hidden_proto (_IO_list_resetlock)
+ /* Default jumptable functions. */
+ 
+ extern int _IO_default_underflow (_IO_FILE *) __THROW;
+-extern int _IO_default_uflow (_IO_FILE *) __THROW;
+-extern wint_t _IO_wdefault_uflow (_IO_FILE *) __THROW;
++extern int _IO_default_uflow (_IO_FILE *);
++extern wint_t _IO_wdefault_uflow (_IO_FILE *);
+ extern int _IO_default_doallocate (_IO_FILE *) __THROW;
+ extern int _IO_wdefault_doallocate (_IO_FILE *) __THROW;
+ extern void _IO_default_finish (_IO_FILE *, int) __THROW;
+ extern void _IO_wdefault_finish (_IO_FILE *, int) __THROW;
+ extern int _IO_default_pbackfail (_IO_FILE *, int) __THROW;
+ extern wint_t _IO_wdefault_pbackfail (_IO_FILE *, wint_t) __THROW;
+-extern _IO_FILE* _IO_default_setbuf (_IO_FILE *, char *, _IO_ssize_t) __THROW;
++extern _IO_FILE* _IO_default_setbuf (_IO_FILE *, char *, _IO_ssize_t);
+ extern _IO_size_t _IO_default_xsputn (_IO_FILE *, const void *, _IO_size_t);
+ extern _IO_size_t _IO_wdefault_xsputn (_IO_FILE *, const void *, _IO_size_t);
+ extern _IO_size_t _IO_default_xsgetn (_IO_FILE *, void *, _IO_size_t);
+ extern _IO_size_t _IO_wdefault_xsgetn (_IO_FILE *, void *, _IO_size_t);
+ extern _IO_off64_t _IO_default_seekoff (_IO_FILE *, _IO_off64_t, int, int)
+      __THROW;
+-extern _IO_off64_t _IO_default_seekpos (_IO_FILE *, _IO_off64_t, int) __THROW;
++extern _IO_off64_t _IO_default_seekpos (_IO_FILE *, _IO_off64_t, int);
+ extern _IO_ssize_t _IO_default_write (_IO_FILE *, const void *, _IO_ssize_t);
+ extern _IO_ssize_t _IO_default_read (_IO_FILE *, void *, _IO_ssize_t);
+ extern int _IO_default_stat (_IO_FILE *, void *) __THROW;
+@@ -473,22 +473,22 @@ extern const struct _IO_jump_t _IO_old_p
+ extern const struct _IO_jump_t _IO_str_jumps attribute_hidden;
+ extern const struct _IO_jump_t _IO_wstr_jumps attribute_hidden;
+ extern const struct _IO_codecvt __libio_codecvt attribute_hidden;
+-extern int _IO_do_write (_IO_FILE *, const char *, _IO_size_t) __THROW;
+-extern int _IO_new_do_write (_IO_FILE *, const char *, _IO_size_t) __THROW;
+-extern int _IO_old_do_write (_IO_FILE *, const char *, _IO_size_t) __THROW;
+-extern int _IO_wdo_write (_IO_FILE *, const wchar_t *, _IO_size_t) __THROW;
+-extern int _IO_flush_all_lockp (int) __THROW;
+-extern int _IO_flush_all (void) __THROW;
+-extern int _IO_cleanup (void) __THROW;
+-extern void _IO_flush_all_linebuffered (void) __THROW;
+-extern int _IO_new_fgetpos (_IO_FILE *, _IO_fpos_t *) __THROW;
+-extern int _IO_old_fgetpos (_IO_FILE *, _IO_fpos_t *) __THROW;
+-extern int _IO_new_fsetpos (_IO_FILE *, const _IO_fpos_t *) __THROW;
+-extern int _IO_old_fsetpos (_IO_FILE *, const _IO_fpos_t *) __THROW;
+-extern int _IO_new_fgetpos64 (_IO_FILE *, _IO_fpos64_t *) __THROW;
+-extern int _IO_old_fgetpos64 (_IO_FILE *, _IO_fpos64_t *) __THROW;
+-extern int _IO_new_fsetpos64 (_IO_FILE *, const _IO_fpos64_t *) __THROW;
+-extern int _IO_old_fsetpos64 (_IO_FILE *, const _IO_fpos64_t *) __THROW;
++extern int _IO_do_write (_IO_FILE *, const char *, _IO_size_t);
++extern int _IO_new_do_write (_IO_FILE *, const char *, _IO_size_t);
++extern int _IO_old_do_write (_IO_FILE *, const char *, _IO_size_t);
++extern int _IO_wdo_write (_IO_FILE *, const wchar_t *, _IO_size_t);
++extern int _IO_flush_all_lockp (int);
++extern int _IO_flush_all (void);
++extern int _IO_cleanup (void);
++extern void _IO_flush_all_linebuffered (void);
++extern int _IO_new_fgetpos (_IO_FILE *, _IO_fpos_t *);
++extern int _IO_old_fgetpos (_IO_FILE *, _IO_fpos_t *);
++extern int _IO_new_fsetpos (_IO_FILE *, const _IO_fpos_t *);
++extern int _IO_old_fsetpos (_IO_FILE *, const _IO_fpos_t *);
++extern int _IO_new_fgetpos64 (_IO_FILE *, _IO_fpos64_t *);
++extern int _IO_old_fgetpos64 (_IO_FILE *, _IO_fpos64_t *);
++extern int _IO_new_fsetpos64 (_IO_FILE *, const _IO_fpos64_t *);
++extern int _IO_old_fsetpos64 (_IO_FILE *, const _IO_fpos64_t *);
+ extern void _IO_old_init (_IO_FILE *fp, int flags) __THROW;
+ 
+ 
+@@ -534,95 +534,79 @@ extern void _IO_old_init (_IO_FILE *fp, 
+ /* Jumptable functions for files. */
+ 
+ extern int _IO_file_doallocate (_IO_FILE *) __THROW;
+-extern _IO_FILE* _IO_file_setbuf (_IO_FILE *, char *, _IO_ssize_t) __THROW;
+-extern _IO_off64_t _IO_file_seekoff (_IO_FILE *, _IO_off64_t, int, int)
+-     __THROW;
++extern _IO_FILE* _IO_file_setbuf (_IO_FILE *, char *, _IO_ssize_t);
++extern _IO_off64_t _IO_file_seekoff (_IO_FILE *, _IO_off64_t, int, int);
+ extern _IO_off64_t _IO_file_seekoff_mmap (_IO_FILE *, _IO_off64_t, int, int)
+      __THROW;
+-extern _IO_size_t _IO_file_xsputn (_IO_FILE *, const void *, _IO_size_t)
+-     __THROW;
+-extern _IO_size_t _IO_file_xsgetn (_IO_FILE *, void *, _IO_size_t) __THROW;
++extern _IO_size_t _IO_file_xsputn (_IO_FILE *, const void *, _IO_size_t);
++extern _IO_size_t _IO_file_xsgetn (_IO_FILE *, void *, _IO_size_t);
+ extern int _IO_file_stat (_IO_FILE *, void *) __THROW;
+ extern int _IO_file_close (_IO_FILE *) __THROW;
+ extern int _IO_file_close_mmap (_IO_FILE *) __THROW;
+-extern int _IO_file_underflow (_IO_FILE *) __THROW;
+-extern int _IO_file_underflow_mmap (_IO_FILE *) __THROW;
+-extern int _IO_file_underflow_maybe_mmap (_IO_FILE *) __THROW;
+-extern int _IO_file_overflow (_IO_FILE *, int) __THROW;
++extern int _IO_file_underflow (_IO_FILE *);
++extern int _IO_file_underflow_mmap (_IO_FILE *);
++extern int _IO_file_underflow_maybe_mmap (_IO_FILE *);
++extern int _IO_file_overflow (_IO_FILE *, int);
+ #define _IO_file_is_open(__fp) ((__fp)->_fileno != -1)
+ extern void _IO_file_init (struct _IO_FILE_plus *) __THROW;
+-extern _IO_FILE* _IO_file_attach (_IO_FILE *, int) __THROW;
+-extern _IO_FILE* _IO_file_open (_IO_FILE *, const char *, int, int, int, int)
+-     __THROW;
++extern _IO_FILE* _IO_file_attach (_IO_FILE *, int);
++extern _IO_FILE* _IO_file_open (_IO_FILE *, const char *, int, int, int, int);
+ libc_hidden_proto (_IO_file_open)
+-extern _IO_FILE* _IO_file_fopen (_IO_FILE *, const char *, const char *, int)
+-     __THROW;
+-extern _IO_ssize_t _IO_file_write (_IO_FILE *, const void *, _IO_ssize_t)
+-     __THROW;
+-extern _IO_ssize_t _IO_file_read (_IO_FILE *, void *, _IO_ssize_t) __THROW;
+-extern int _IO_file_sync (_IO_FILE *) __THROW;
+-extern int _IO_file_close_it (_IO_FILE *) __THROW;
++extern _IO_FILE* _IO_file_fopen (_IO_FILE *, const char *, const char *, int);
++extern _IO_ssize_t _IO_file_write (_IO_FILE *, const void *, _IO_ssize_t);
++extern _IO_ssize_t _IO_file_read (_IO_FILE *, void *, _IO_ssize_t);
++extern int _IO_file_sync (_IO_FILE *);
++extern int _IO_file_close_it (_IO_FILE *);
+ extern _IO_off64_t _IO_file_seek (_IO_FILE *, _IO_off64_t, int) __THROW;
+-extern void _IO_file_finish (_IO_FILE *, int) __THROW;
++extern void _IO_file_finish (_IO_FILE *, int);
+ 
+-extern _IO_FILE* _IO_new_file_attach (_IO_FILE *, int) __THROW;
+-extern int _IO_new_file_close_it (_IO_FILE *) __THROW;
+-extern void _IO_new_file_finish (_IO_FILE *, int) __THROW;
++extern _IO_FILE* _IO_new_file_attach (_IO_FILE *, int);
++extern int _IO_new_file_close_it (_IO_FILE *);
++extern void _IO_new_file_finish (_IO_FILE *, int);
+ extern _IO_FILE* _IO_new_file_fopen (_IO_FILE *, const char *, const char *,
+-				     int) __THROW;
++				     int);
+ extern void _IO_no_init (_IO_FILE *, int, int, struct _IO_wide_data *,
+ 			 const struct _IO_jump_t *) __THROW;
+ extern void _IO_new_file_init (struct _IO_FILE_plus *) __THROW;
+-extern _IO_FILE* _IO_new_file_setbuf (_IO_FILE *, char *, _IO_ssize_t) __THROW;
+-extern _IO_FILE* _IO_file_setbuf_mmap (_IO_FILE *, char *, _IO_ssize_t)
+-     __THROW;
+-extern int _IO_new_file_sync (_IO_FILE *) __THROW;
+-extern int _IO_new_file_underflow (_IO_FILE *) __THROW;
+-extern int _IO_new_file_overflow (_IO_FILE *, int) __THROW;
+-extern _IO_off64_t _IO_new_file_seekoff (_IO_FILE *, _IO_off64_t, int, int)
+-     __THROW;
+-extern _IO_ssize_t _IO_new_file_write (_IO_FILE *, const void *, _IO_ssize_t)
+-     __THROW;
+-extern _IO_size_t _IO_new_file_xsputn (_IO_FILE *, const void *, _IO_size_t)
+-     __THROW;
+-
+-extern _IO_FILE* _IO_old_file_setbuf (_IO_FILE *, char *, _IO_ssize_t) __THROW;
+-extern _IO_off64_t _IO_old_file_seekoff (_IO_FILE *, _IO_off64_t, int, int)
+-     __THROW;
+-extern _IO_size_t _IO_old_file_xsputn (_IO_FILE *, const void *, _IO_size_t)
+-     __THROW;
+-extern int _IO_old_file_underflow (_IO_FILE *) __THROW;
+-extern int _IO_old_file_overflow (_IO_FILE *, int) __THROW;
++extern _IO_FILE* _IO_new_file_setbuf (_IO_FILE *, char *, _IO_ssize_t);
++extern _IO_FILE* _IO_file_setbuf_mmap (_IO_FILE *, char *, _IO_ssize_t);
++extern int _IO_new_file_sync (_IO_FILE *);
++extern int _IO_new_file_underflow (_IO_FILE *);
++extern int _IO_new_file_overflow (_IO_FILE *, int);
++extern _IO_off64_t _IO_new_file_seekoff (_IO_FILE *, _IO_off64_t, int, int);
++extern _IO_ssize_t _IO_new_file_write (_IO_FILE *, const void *, _IO_ssize_t);
++extern _IO_size_t _IO_new_file_xsputn (_IO_FILE *, const void *, _IO_size_t);
++
++extern _IO_FILE* _IO_old_file_setbuf (_IO_FILE *, char *, _IO_ssize_t);
++extern _IO_off64_t _IO_old_file_seekoff (_IO_FILE *, _IO_off64_t, int, int);
++extern _IO_size_t _IO_old_file_xsputn (_IO_FILE *, const void *, _IO_size_t);
++extern int _IO_old_file_underflow (_IO_FILE *);
++extern int _IO_old_file_overflow (_IO_FILE *, int);
+ extern void _IO_old_file_init (struct _IO_FILE_plus *) __THROW;
+-extern _IO_FILE* _IO_old_file_attach (_IO_FILE *, int) __THROW;
+-extern _IO_FILE* _IO_old_file_fopen (_IO_FILE *, const char *, const char *)
+-     __THROW;
+-extern _IO_ssize_t _IO_old_file_write (_IO_FILE *, const void *, _IO_ssize_t)
+-     __THROW;
+-extern int _IO_old_file_sync (_IO_FILE *) __THROW;
+-extern int _IO_old_file_close_it (_IO_FILE *) __THROW;
+-extern void _IO_old_file_finish (_IO_FILE *, int) __THROW;
++extern _IO_FILE* _IO_old_file_attach (_IO_FILE *, int);
++extern _IO_FILE* _IO_old_file_fopen (_IO_FILE *, const char *, const char *);
++extern _IO_ssize_t _IO_old_file_write (_IO_FILE *, const void *, _IO_ssize_t);
++extern int _IO_old_file_sync (_IO_FILE *);
++extern int _IO_old_file_close_it (_IO_FILE *);
++extern void _IO_old_file_finish (_IO_FILE *, int);
+ 
+ extern int _IO_wfile_doallocate (_IO_FILE *) __THROW;
+-extern _IO_size_t _IO_wfile_xsputn (_IO_FILE *, const void *, _IO_size_t)
+-     __THROW;
+-extern _IO_FILE* _IO_wfile_setbuf (_IO_FILE *, wchar_t *, _IO_ssize_t) __THROW;
+-extern wint_t _IO_wfile_sync (_IO_FILE *) __THROW;
+-extern wint_t _IO_wfile_underflow (_IO_FILE *) __THROW;
+-extern wint_t _IO_wfile_overflow (_IO_FILE *, wint_t) __THROW;
+-extern _IO_off64_t _IO_wfile_seekoff (_IO_FILE *, _IO_off64_t, int, int)
+-     __THROW;
++extern _IO_size_t _IO_wfile_xsputn (_IO_FILE *, const void *, _IO_size_t);
++extern _IO_FILE* _IO_wfile_setbuf (_IO_FILE *, wchar_t *, _IO_ssize_t);
++extern wint_t _IO_wfile_sync (_IO_FILE *);
++extern wint_t _IO_wfile_underflow (_IO_FILE *);
++extern wint_t _IO_wfile_overflow (_IO_FILE *, wint_t);
++extern _IO_off64_t _IO_wfile_seekoff (_IO_FILE *, _IO_off64_t, int, int);
+ 
+ /* Jumptable functions for proc_files. */
+ extern _IO_FILE* _IO_proc_open (_IO_FILE *, const char *, const char *)
+      __THROW;
+ extern _IO_FILE* _IO_new_proc_open (_IO_FILE *, const char *, const char *)
+      __THROW;
+-extern _IO_FILE* _IO_old_proc_open (_IO_FILE *, const char *, const char *)
+-     __THROW;
++extern _IO_FILE* _IO_old_proc_open (_IO_FILE *, const char *, const char *);
+ extern int _IO_proc_close (_IO_FILE *) __THROW;
+ extern int _IO_new_proc_close (_IO_FILE *) __THROW;
+-extern int _IO_old_proc_close (_IO_FILE *) __THROW;
++extern int _IO_old_proc_close (_IO_FILE *);
+ 
+ /* Jumptable functions for strfiles. */
+ extern int _IO_str_underflow (_IO_FILE *) __THROW;
+@@ -660,73 +644,62 @@ extern int _IO_vsnprintf (char *string, 
+ extern _IO_size_t _IO_getline (_IO_FILE *,char *, _IO_size_t, int, int);
+ extern _IO_size_t _IO_getline_info (_IO_FILE *,char *, _IO_size_t,
+ 				    int, int, int *);
+-extern _IO_ssize_t _IO_getdelim (char **, _IO_size_t *, int, _IO_FILE *)
+-     __THROW;
++extern _IO_ssize_t _IO_getdelim (char **, _IO_size_t *, int, _IO_FILE *);
+ extern _IO_size_t _IO_getwline (_IO_FILE *,wchar_t *, _IO_size_t, wint_t, int);
+ extern _IO_size_t _IO_getwline_info (_IO_FILE *,wchar_t *, _IO_size_t,
+ 				     wint_t, int, wint_t *);
+-extern double _IO_strtod (const char *, char **) __THROW;
+-extern char *_IO_dtoa (double __d, int __mode, int __ndigits,
+-		       int *__decpt, int *__sign, char **__rve) __THROW;
+-extern int _IO_outfloat (double __value, _IO_FILE *__sb, int __type,
+-			 int __width, int __precision, int __flags,
+-			 int __sign_mode, int __fill) __THROW;
+ 
+ extern struct _IO_FILE_plus *_IO_list_all;
+ extern void (*_IO_cleanup_registration_needed) (void);
+ 
+ /* Prototype for functions with alternative entry point.  */
+-extern int _IO_flush_all_internal (void) __THROW;
+-extern unsigned _IO_adjust_column_internal (unsigned, const char *, int)
+-     __THROW;
++extern int _IO_flush_all_internal (void);
++extern unsigned _IO_adjust_column_internal (unsigned, const char *, int);
+ 
+-extern int _IO_default_uflow_internal (_IO_FILE *) __THROW;
++extern int _IO_default_uflow_internal (_IO_FILE *);
+ extern void _IO_default_finish_internal (_IO_FILE *, int) __THROW;
+ extern int _IO_default_pbackfail_internal (_IO_FILE *, int) __THROW;
+ extern _IO_size_t _IO_default_xsputn_internal (_IO_FILE *, const void *,
+-					       _IO_size_t) __THROW;
+-extern _IO_size_t _IO_default_xsgetn_internal (_IO_FILE *, void *, _IO_size_t)
+-     __THROW;
++					       _IO_size_t);
++extern _IO_size_t _IO_default_xsgetn_internal (_IO_FILE *, void *, _IO_size_t);
+ extern int _IO_default_doallocate_internal (_IO_FILE *) __THROW;
+ extern void _IO_wdefault_finish_internal (_IO_FILE *, int) __THROW;
+ extern wint_t _IO_wdefault_pbackfail_internal (_IO_FILE *, wint_t) __THROW;
+ extern _IO_size_t _IO_wdefault_xsputn_internal (_IO_FILE *, const void *,
+-						_IO_size_t) __THROW;
++						_IO_size_t);
+ extern _IO_size_t _IO_wdefault_xsgetn_internal (_IO_FILE *, void *,
+-						_IO_size_t) __THROW;
++						_IO_size_t);
+ extern int _IO_wdefault_doallocate_internal (_IO_FILE *) __THROW;
+-extern wint_t _IO_wdefault_uflow_internal (_IO_FILE *) __THROW;
++extern wint_t _IO_wdefault_uflow_internal (_IO_FILE *);
+ 
+ extern int _IO_file_doallocate_internal (_IO_FILE *) __THROW;
+-extern _IO_FILE* _IO_file_setbuf_internal (_IO_FILE *, char *, _IO_ssize_t)
+-     __THROW;
++extern _IO_FILE* _IO_file_setbuf_internal (_IO_FILE *, char *, _IO_ssize_t);
+ extern _IO_off64_t _IO_file_seekoff_internal (_IO_FILE *, _IO_off64_t,
+-					      int, int) __THROW;
++					      int, int);
+ extern _IO_size_t _IO_file_xsputn_internal (_IO_FILE *, const void *,
+-					    _IO_size_t) __THROW;
+-extern _IO_size_t _IO_file_xsgetn_internal (_IO_FILE *, void *, _IO_size_t)
+-     __THROW;
++					    _IO_size_t);
++extern _IO_size_t _IO_file_xsgetn_internal (_IO_FILE *, void *, _IO_size_t);
+ extern int _IO_file_stat_internal (_IO_FILE *, void *) __THROW;
+ extern int _IO_file_close_internal (_IO_FILE *) __THROW;
+-extern int _IO_file_close_it_internal (_IO_FILE *) __THROW;
+-extern int _IO_file_underflow_internal (_IO_FILE *) __THROW;
+-extern int _IO_file_overflow_internal (_IO_FILE *, int) __THROW;
++extern int _IO_file_close_it_internal (_IO_FILE *);
++extern int _IO_file_underflow_internal (_IO_FILE *);
++extern int _IO_file_overflow_internal (_IO_FILE *, int);
+ extern void _IO_file_init_internal (struct _IO_FILE_plus *) __THROW;
+-extern _IO_FILE* _IO_file_attach_internal (_IO_FILE *, int) __THROW;
++extern _IO_FILE* _IO_file_attach_internal (_IO_FILE *, int);
+ extern _IO_FILE* _IO_file_fopen_internal (_IO_FILE *, const char *,
+-					  const char *, int) __THROW;
++					  const char *, int);
+ extern _IO_ssize_t _IO_file_read_internal (_IO_FILE *, void *,
+ 					   _IO_ssize_t);
+-extern int _IO_file_sync_internal (_IO_FILE *) __THROW;
++extern int _IO_file_sync_internal (_IO_FILE *);
+ extern _IO_off64_t _IO_file_seek_internal (_IO_FILE *, _IO_off64_t, int)
+      __THROW;
+-extern void _IO_file_finish_internal (_IO_FILE *, int) __THROW;
++extern void _IO_file_finish_internal (_IO_FILE *, int);
+ 
+ extern _IO_size_t _IO_wfile_xsputn_internal (_IO_FILE *, const void *,
+-					     _IO_size_t) __THROW;
++					     _IO_size_t);
+ extern _IO_off64_t _IO_wfile_seekoff_internal (_IO_FILE *, _IO_off64_t,
+-					       int, int) __THROW;
+-extern wint_t _IO_wfile_sync_internal (_IO_FILE *) __THROW;
++					       int, int);
++extern wint_t _IO_wfile_sync_internal (_IO_FILE *);
+ 
+ extern int _IO_str_underflow_internal (_IO_FILE *) __THROW;
+ extern int _IO_str_overflow_internal (_IO_FILE *, int) __THROW;
+@@ -747,12 +720,12 @@ extern void _IO_wdoallocbuf_internal (_I
+ 
+ extern _IO_size_t _IO_sgetn_internal (_IO_FILE *, void *, _IO_size_t);
+ extern void _IO_flush_all_linebuffered_internal (void) __THROW;
+-extern int _IO_switch_to_wget_mode_internal (_IO_FILE *) __THROW;
++extern int _IO_switch_to_wget_mode_internal (_IO_FILE *);
+ extern void _IO_unsave_markers_internal (_IO_FILE *) __THROW;
+ extern void _IO_switch_to_main_wget_area_internal (_IO_FILE *) __THROW;
+ extern int _IO_wdo_write_internal (_IO_FILE *, const wchar_t *, _IO_size_t);
+ extern int _IO_do_write_internal (_IO_FILE *, const char *, _IO_size_t);
+-extern _IO_ssize_t _IO_padn_internal (_IO_FILE *, int, _IO_ssize_t) __THROW;
++extern _IO_ssize_t _IO_padn_internal (_IO_FILE *, int, _IO_ssize_t);
+ extern _IO_size_t _IO_getline_info_internal (_IO_FILE *,char *, _IO_size_t,
+ 					     int, int, int *);
+ extern _IO_size_t _IO_getline_internal (_IO_FILE *, char *, _IO_size_t, int,
+@@ -762,7 +735,7 @@ extern void _IO_free_backup_area_interna
+ extern void _IO_switch_to_wbackup_area_internal (_IO_FILE *) __THROW;
+ extern void _IO_setb_internal (_IO_FILE *, char *, char *, int) __THROW;
+ extern wint_t _IO_sputbackwc_internal (_IO_FILE *, wint_t) __THROW;
+-extern int _IO_switch_to_get_mode_internal (_IO_FILE *) __THROW;
++extern int _IO_switch_to_get_mode_internal (_IO_FILE *);
+ extern int _IO_vfscanf_internal (_IO_FILE * __restrict,
+ 				 const char * __restrict,
+ 				 _IO_va_list, int *__restrict);
+@@ -772,9 +745,9 @@ extern void _IO_doallocbuf_internal (_IO
+ extern void _IO_wsetb_internal (_IO_FILE *, wchar_t *, wchar_t *, int)
+      __THROW;
+ extern _IO_off64_t _IO_seekoff_unlocked (_IO_FILE *, _IO_off64_t, int, int)
+-     attribute_hidden __THROW;
++     attribute_hidden;
+ extern _IO_off64_t _IO_seekpos_unlocked (_IO_FILE *, _IO_off64_t, int)
+-     attribute_hidden __THROW;
++     attribute_hidden;
+ extern int _IO_putc_internal (int __c, _IO_FILE *__fp);
+ extern void _IO_init_internal (_IO_FILE *, int) __THROW;
+ extern void _IO_un_link_internal (struct _IO_FILE_plus *) __THROW;
+@@ -866,12 +839,6 @@ extern void _IO_un_link_internal (struct
+ #ifndef OS_FSTAT
+ # define OS_FSTAT fstat
+ #endif
+-struct stat;
+-extern _IO_ssize_t _IO_read (int, void *, _IO_size_t);
+-extern _IO_ssize_t _IO_write (int, const void *, _IO_size_t);
+-extern _IO_off64_t _IO_lseek (int, _IO_off64_t, int) __THROW;
+-extern int _IO_close (int);
+-extern int _IO_fstat (int, struct stat *) __THROW;
+ extern int _IO_vscanf (const char *, _IO_va_list) __THROW;
+ 
+ /* _IO_pos_BAD is an _IO_off64_t value indicating error, unknown, or EOF. */
+--- libc/libio/oldfileops.c	17 Oct 2005 15:54:13 -0000	1.31
++++ libc/libio/oldfileops.c	16 Apr 2007 23:14:41 -0000	1.32
+@@ -271,7 +272,7 @@ _IO_old_file_setbuf (fp, p, len)
+     return fp;
+ }
+ 
+-static int old_do_write (_IO_FILE *, const char *, _IO_size_t) __THROW;
++static int old_do_write (_IO_FILE *, const char *, _IO_size_t);
+ 
+ /* Write TO_DO bytes from DATA to FP.
+    Then mark FP as having empty buffers. */

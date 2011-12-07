@@ -1,0 +1,254 @@
+2008-12-09  Jakub Jelinek  <jakub@redhat.com>
+
+	* pthread_mutex_lock.c (__pthread_mutex_lock): Handle only the
+	fast path here, for robust/PI/PP mutexes call
+	__pthread_mutex_lock_full.  Don't use switch, instead use a series
+	of ifs according to their probability.
+	(__pthread_mutex_lock_full): New function.
+	* pthread_mutex_unlock.c: Include assert.h.
+	(__pthread_mutex_unlock_usercnt): Handle only the
+	fast path here, for robust/PI/PP mutexes call
+	__pthread_mutex_unlock_full.  Don't use switch, instead use a series
+	of ifs according to their probability.
+	(__pthread_mutex_unlock_full): New function.
+	* sysdeps/unix/sysv/linux/pthread_mutex_cond_lock.c
+	(__pthread_mutex_lock_full): Define.
+
+--- libc/nptl/pthread_mutex_lock.c	1 Nov 2008 19:49:08 -0000	1.21
++++ libc/nptl/pthread_mutex_lock.c	12 Dec 2008 18:45:15 -0000	1.22
+@@ -37,21 +37,34 @@
+ #endif
+ 
+ 
++static int __pthread_mutex_lock_full (pthread_mutex_t *mutex)
++     __attribute_noinline__;
++
++
+ int
+ __pthread_mutex_lock (mutex)
+      pthread_mutex_t *mutex;
+ {
+   assert (sizeof (mutex->__size) >= sizeof (mutex->__data));
+ 
+-  int oldval;
++  unsigned int type = PTHREAD_MUTEX_TYPE (mutex);
++  if (__builtin_expect (type & ~PTHREAD_MUTEX_KIND_MASK_NP, 0))
++    return __pthread_mutex_lock_full (mutex);
++
+   pid_t id = THREAD_GETMEM (THREAD_SELF, tid);
+ 
+-  int retval = 0;
+-  switch (__builtin_expect (PTHREAD_MUTEX_TYPE (mutex),
+-			    PTHREAD_MUTEX_TIMED_NP))
++  if (__builtin_expect (type, PTHREAD_MUTEX_TIMED_NP)
++      == PTHREAD_MUTEX_TIMED_NP)
++    {
++    simple:
++      /* Normal mutex.  */
++      LLL_MUTEX_LOCK (mutex);
++      assert (mutex->__data.__owner == 0);
++    }
++  else if (__builtin_expect (type == PTHREAD_MUTEX_RECURSIVE_NP, 1))
+     {
+       /* Recursive mutex.  */
+-    case PTHREAD_MUTEX_RECURSIVE_NP:
++
+       /* Check whether we already hold the mutex.  */
+       if (mutex->__data.__owner == id)
+ 	{
+@@ -70,24 +83,9 @@ __pthread_mutex_lock (mutex)
+ 
+       assert (mutex->__data.__owner == 0);
+       mutex->__data.__count = 1;
+-      break;
+-
+-      /* Error checking mutex.  */
+-    case PTHREAD_MUTEX_ERRORCHECK_NP:
+-      /* Check whether we already hold the mutex.  */
+-      if (__builtin_expect (mutex->__data.__owner == id, 0))
+-	return EDEADLK;
+-
+-      /* FALLTHROUGH */
+-
+-    case PTHREAD_MUTEX_TIMED_NP:
+-    simple:
+-      /* Normal mutex.  */
+-      LLL_MUTEX_LOCK (mutex);
+-      assert (mutex->__data.__owner == 0);
+-      break;
+-
+-    case PTHREAD_MUTEX_ADAPTIVE_NP:
++    }
++  else if (__builtin_expect (type == PTHREAD_MUTEX_ADAPTIVE_NP, 1))
++    {
+       if (! __is_smp)
+ 	goto simple;
+ 
+@@ -113,8 +111,34 @@ __pthread_mutex_lock (mutex)
+ 	  mutex->__data.__spins += (cnt - mutex->__data.__spins) / 8;
+ 	}
+       assert (mutex->__data.__owner == 0);
+-      break;
++    }
++  else
++    {
++      assert (type == PTHREAD_MUTEX_ERRORCHECK_NP);
++      /* Check whether we already hold the mutex.  */
++      if (__builtin_expect (mutex->__data.__owner == id, 0))
++	return EDEADLK;
++      goto simple;
++    }
+ 
++ out:
++  /* Record the ownership.  */
++  mutex->__data.__owner = id;
++#ifndef NO_INCR
++  ++mutex->__data.__nusers;
++#endif
++
++  return 0;
++}
++
++static int
++__pthread_mutex_lock_full (pthread_mutex_t *mutex)
++{
++  int oldval;
++  pid_t id = THREAD_GETMEM (THREAD_SELF, tid);
++
++  switch (PTHREAD_MUTEX_TYPE (mutex))
++    {
+     case PTHREAD_MUTEX_ROBUST_RECURSIVE_NP:
+     case PTHREAD_MUTEX_ROBUST_ERRORCHECK_NP:
+     case PTHREAD_MUTEX_ROBUST_NORMAL_NP:
+@@ -332,8 +356,7 @@ __pthread_mutex_lock (mutex)
+ 	    INTERNAL_SYSCALL_DECL (__err);
+ 	    INTERNAL_SYSCALL (futex, __err, 4, &mutex->__data.__lock,
+ 			      __lll_private_flag (FUTEX_UNLOCK_PI,
+-						  PTHREAD_ROBUST_MUTEX_PSHARED (mutex)
+-),
++						  PTHREAD_ROBUST_MUTEX_PSHARED (mutex)),
+ 			      0, 0);
+ 
+ 	    THREAD_SETMEM (THREAD_SELF, robust_head.list_op_pending, NULL);
+@@ -390,7 +413,7 @@ __pthread_mutex_lock (mutex)
+ 		return EINVAL;
+ 	      }
+ 
+-	    retval = __pthread_tpp_change_priority (oldprio, ceiling);
++	    int retval = __pthread_tpp_change_priority (oldprio, ceiling);
+ 	    if (retval)
+ 	      return retval;
+ 
+@@ -445,7 +468,7 @@ __pthread_mutex_lock (mutex)
+   ++mutex->__data.__nusers;
+ #endif
+ 
+-  return retval;
++  return 0;
+ }
+ #ifndef __pthread_mutex_lock
+ strong_alias (__pthread_mutex_lock, pthread_mutex_lock)
+--- libc/nptl/pthread_mutex_unlock.c	1 Nov 2008 19:42:36 -0000	1.19
++++ libc/nptl/pthread_mutex_unlock.c	12 Dec 2008 18:45:41 -0000	1.20
+@@ -17,11 +17,16 @@
+    Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+    02111-1307 USA.  */
+ 
++#include <assert.h>
+ #include <errno.h>
+ #include <stdlib.h>
+ #include "pthreadP.h"
+ #include <lowlevellock.h>
+ 
++static int
++internal_function
++__pthread_mutex_unlock_full (pthread_mutex_t *mutex, int decr)
++     __attribute_noinline__;
+ 
+ int
+ internal_function attribute_hidden
+@@ -29,12 +34,26 @@ __pthread_mutex_unlock_usercnt (mutex, d
+      pthread_mutex_t *mutex;
+      int decr;
+ {
+-  int newowner = 0;
++  int type = PTHREAD_MUTEX_TYPE (mutex);
++  if (__builtin_expect (type & ~PTHREAD_MUTEX_KIND_MASK_NP, 0))
++    return __pthread_mutex_unlock_full (mutex, decr);
++
++  if (__builtin_expect (type, PTHREAD_MUTEX_TIMED_NP)
++      == PTHREAD_MUTEX_TIMED_NP)
++    {
++      /* Always reset the owner field.  */
++    normal:
++      mutex->__data.__owner = 0;
++      if (decr)
++	/* One less user.  */
++	--mutex->__data.__nusers;
+ 
+-  switch (__builtin_expect (PTHREAD_MUTEX_TYPE (mutex),
+-			    PTHREAD_MUTEX_TIMED_NP))
++      /* Unlock.  */
++      lll_unlock (mutex->__data.__lock, PTHREAD_MUTEX_PSHARED (mutex));
++      return 0;
++    }
++  else if (__builtin_expect (type == PTHREAD_MUTEX_RECURSIVE_NP, 1))
+     {
+-    case PTHREAD_MUTEX_RECURSIVE_NP:
+       /* Recursive mutex.  */
+       if (mutex->__data.__owner != THREAD_GETMEM (THREAD_SELF, tid))
+ 	return EPERM;
+@@ -43,27 +62,29 @@ __pthread_mutex_unlock_usercnt (mutex, d
+ 	/* We still hold the mutex.  */
+ 	return 0;
+       goto normal;
+-
+-    case PTHREAD_MUTEX_ERRORCHECK_NP:
++    }
++  else if (__builtin_expect (type == PTHREAD_MUTEX_ADAPTIVE_NP, 1))
++    goto normal;
++  else
++    {
+       /* Error checking mutex.  */
++      assert (type == PTHREAD_MUTEX_ERRORCHECK_NP);
+       if (mutex->__data.__owner != THREAD_GETMEM (THREAD_SELF, tid)
+ 	  || ! lll_islocked (mutex->__data.__lock))
+ 	return EPERM;
+-      /* FALLTHROUGH */
++      goto normal;
++    }
++}
+ 
+-    case PTHREAD_MUTEX_TIMED_NP:
+-    case PTHREAD_MUTEX_ADAPTIVE_NP:
+-      /* Always reset the owner field.  */
+-    normal:
+-      mutex->__data.__owner = 0;
+-      if (decr)
+-	/* One less user.  */
+-	--mutex->__data.__nusers;
+ 
+-      /* Unlock.  */
+-      lll_unlock (mutex->__data.__lock, PTHREAD_MUTEX_PSHARED (mutex));
+-      break;
++static int
++internal_function
++__pthread_mutex_unlock_full (pthread_mutex_t *mutex, int decr)
++{
++  int newowner = 0;
+ 
++  switch (PTHREAD_MUTEX_TYPE (mutex))
++    {
+     case PTHREAD_MUTEX_ROBUST_RECURSIVE_NP:
+       /* Recursive mutex.  */
+       if ((mutex->__data.__lock & FUTEX_TID_MASK)
+--- libc/nptl/sysdeps/unix/sysv/linux/pthread_mutex_cond_lock.c	11 Aug 2007 18:50:38 -0000	1.6
++++ libc/nptl/sysdeps/unix/sysv/linux/pthread_mutex_cond_lock.c	12 Dec 2008 18:46:07 -0000	1.7
+@@ -8,6 +8,7 @@
+   lll_robust_cond_lock ((mutex)->__data.__lock, id, \
+ 			PTHREAD_ROBUST_MUTEX_PSHARED (mutex))
+ #define __pthread_mutex_lock __pthread_mutex_cond_lock
++#define __pthread_mutex_lock_full __pthread_mutex_cond_lock_full
+ #define NO_INCR
+ 
+ #include <nptl/pthread_mutex_lock.c>

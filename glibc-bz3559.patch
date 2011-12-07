@@ -1,0 +1,21 @@
+2006-11-27  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #3559]
+	* sunrpc/svc_run.c (svc_run): Fail instead of segfaulting if
+	malloc crashed.
+
+--- libc/sunrpc/svc_run.c	2002-05-15 02:21:01.000000000 +0200
++++ libc/sunrpc/svc_run.c	2006-11-28 17:06:24.000000000 +0100
+@@ -60,6 +60,12 @@ svc_run (void)
+ 	return;
+ 
+       my_pollfd = malloc (sizeof (struct pollfd) * svc_max_pollfd);
++      if (my_pollfd == NULL)
++	{
++	  perror (_("svc_run: - out of memory"));
++	  return;
++	}
++
+       for (i = 0; i < svc_max_pollfd; ++i)
+ 	{
+ 	  my_pollfd[i].fd = svc_pollfd[i].fd;

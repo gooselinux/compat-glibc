@@ -1,0 +1,34 @@
+2007-11-22  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #5378]
+	* nis/nss_compat/compat-initgroups.c (getgrent_next_nss): Don't
+	use result of nss_getgrgid_r if nothing was found.  For other
+	error return with a failure.
+	Partially based on a patch by Petr Baudis <pasky@suse.cz>.
+
+--- libc/nis/nss_compat/compat-initgroups.c	22 Jul 2007 18:38:27 -0000	1.19
++++ libc/nis/nss_compat/compat-initgroups.c	23 Nov 2007 02:35:44 -0000	1.20
+@@ -303,10 +303,19 @@ getgrent_next_nss (ent_t *ent, char *buf
+ 		else
+ 		  tmpbuf = extend_alloca (tmpbuf, tmplen, 2 * tmplen);
+ 
+-	      if (!in_blacklist (grpbuf.gr_name,
+-				 strlen (grpbuf.gr_name), ent))
+-		check_and_add_group (user, group, start, size, groupsp,
+-				     limit, &grpbuf);
++	      if (__builtin_expect  (status != NSS_STATUS_NOTFOUND, 1))
++		{
++		  if (__builtin_expect  (status != NSS_STATUS_SUCCESS, 0))
++		    {
++		      free (mygroups);
++		      return status;
++		    }
++
++		  if (!in_blacklist (grpbuf.gr_name,
++				     strlen (grpbuf.gr_name), ent))
++		    check_and_add_group (user, group, start, size, groupsp,
++					 limit, &grpbuf);
++		}
+ 	    }
+ 
+ 	  free (mygroups);

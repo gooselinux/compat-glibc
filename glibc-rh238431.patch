@@ -1,0 +1,41 @@
+2007-04-30  Jakub Jelinek  <jakub@redhat.com>
+
+	* stdio-common/printf_fp.c (___printf_fp): Don't print negative sign
+	for exponent 0.
+	* stdio-common/tfformat.c (sprint_doubles): Add a new test.
+
+--- libc/stdio-common/printf_fp.c	16 Apr 2007 23:28:26 -0000	1.62
++++ libc/stdio-common/printf_fp.c	30 Apr 2007 22:31:21 -0000	1.63
+@@ -793,7 +793,7 @@ ___printf_fp (FILE *fp,
+   else
+     {
+       /* This is a special case.  We don't need a factor because the
+-	 numbers are in the range of 0.0 <= fp < 8.0.  We simply
++	 numbers are in the range of 1.0 <= |fp| < 8.0.  We simply
+ 	 shift it to the right place and divide it by 1.0 to get the
+ 	 leading digit.	 (Of course this division is not really made.)	*/
+       assert (0 <= exponent && exponent < 3 &&
+@@ -1013,6 +1013,12 @@ ___printf_fp (FILE *fp,
+ 		  {
+ 		    *wstartp = '1';
+ 		    exponent += expsign == 0 ? 1 : -1;
++
++		    /* The above exponent adjustment could lead to 1.0e-00,
++		       e.g. for 0.999999999.  Make sure exponent 0 always
++		       uses + sign.  */
++		    if (exponent == 0)
++		      expsign = 0;
+ 		  }
+ 		else if (intdig_no == dig_max)
+ 		  {
+--- libc/stdio-common/tfformat.c	16 Apr 2007 23:28:37 -0000	1.9
++++ libc/stdio-common/tfformat.c	30 Apr 2007 22:31:36 -0000	1.10
+@@ -4021,6 +4021,8 @@ sprint_double_type sprint_doubles[] =
+   {__LINE__, 0.000098,			"0.0001", "%#.0g"},
+   {__LINE__, 0.0000996,			"0.00010", "%#.2g"},
+   {__LINE__, 9.999999999999999e-05,	"0.0001", "%g"},
++  {__LINE__, 1.0,			"1.000000e+00", "%e"},
++  {__LINE__, .9999999999999999,		"1.000000e+00", "%e"},
+ 
+   {0 }
+ 

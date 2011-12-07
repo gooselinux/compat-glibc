@@ -1,0 +1,1314 @@
+2008-06-12  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/powerpc/powerpc64/fpu/s_llround.S (__llround): Avoid using
+	cr[34] registers.
+	* sysdeps/powerpc/powerpc64/fpu/s_llroundf.S (__llroundf): Likewise.
+	* sysdeps/powerpc/powerpc32/fpu/s_lround.S (__lround): Avoid using cr3
+	register.
+
+2008-02-18  Steven Munroe  <sjmunroe@us.ibm.com>
+
+	[BZ #5768]
+	* sysdeps/powerpc/powerpc32/fpu/s_isnan.S: New file.
+	* sysdeps/powerpc/powerpc32/fpu/s_isnan.c: Removed.
+	* sysdeps/powerpc/powerpc64/fpu/s_isnan.S: New file.
+	* sysdeps/powerpc/powerpc64/fpu/s_isnan.c: Removed.
+
+2007-11-20  Ryan S. Arnold  <rsa@us.ibm.com>
+
+	[BZ #4997]
+	* sysdeps/powerpc/powerpc32/fpu/s_lround.S (__lround): Fixed erroneous
+	result when x is +/-nextafter(+/-0.5,-/+1) i.e. all 1's in the
+	mantissa.
+	* sysdeps/powerpc/powerpc64/fpu/s_llround.S (__llround): Likewise.
+	Also account for when x is an odd number between 2^52 and 2^53-1.
+	* sysdeps/powerpc/powerpc64/fpu/s_llroundf.S (__llroundf): Likewise.
+	* math/libm-test.inc (lround_test, llround_test): Added test cases to
+	detect aforementioned erroneous conditions.
+
+powerpc-cpu/
+2008-06-12  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/powerpc/powerpc32/powerpc64/fpu/s_llround.S (__llround):
+	Avoid using cr[34] registers.
+
+2008-03-03  Steven Munroe  <sjmunroe@us.ibm.com>
+
+        * sysdeps/powerpc/powerpc32/power6/fpu/s_isnan.S: New file.
+        * sysdeps/powerpc/powerpc32/power6/fpu/s_isnanf.S: New file.
+        * sysdeps/powerpc/powerpc64/power6/fpu/s_isnan.S: New file.
+
+2007-11-20  Ryan S. Arnold  <rsa@us.ibm.com>
+
+	[BZ #4997]
+	* sysdeps/powerpc/powerpc32/powerpc64/fpu/s_llround.S (__llround):
+	Fixed erroneous result when x is +/-nextafter(+/-0.5,-/+1) i.e. all
+	1's in the mantissa.  Also account for when x is an odd number between
+	2^52 and 2^53-1.
+
+2007-10-26  Steven Munroe  <sjmunroe@us.ibm.com>
+
+	* sysdeps/powerpc/powerpc32/powerpc64/fpu/w_sqrt.S: New File.
+	* sysdeps/powerpc/powerpc32/powerpc64/fpu/w_sqrtf.S: New File.
+
+2007-05-21  Steven Munroe  <sjmunroe@us.ibm.com>
+
+	* sysdeps/powerpc/powerpc32/powerpc64/fpu/slowexp.c: New file.
+        * sysdeps/powerpc/powerpc64/power4/fpu/slowexp.c: New file.
+	* sysdeps/powerpc/powerpc64/power4/fpu/w_sqrt.c: New file.
+
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/fpu/w_sqrtf.c.jj	2008-08-27 15:23:37.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/fpu/w_sqrtf.c	2007-06-03 23:15:58.000000000 +0200
+@@ -0,0 +1,60 @@
++/* Single-precision floating point square root wrapper.
++   Copyright (C) 2004, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include "math.h"
++#include "math_private.h"
++#include <fenv_libc.h>
++
++#include <sysdep.h>
++#include <ldsodefs.h>
++
++#ifdef __STDC__
++float
++__sqrtf (float x)		/* wrapper sqrtf */
++#else
++float
++__sqrtf (x)			/* wrapper sqrtf */
++     float x;
++#endif
++{
++#ifdef _IEEE_LIBM
++  return __ieee754_sqrtf (x);
++#else
++  float z;
++/* Power4 (ISA V2.0) and above implement sqrtf in hardware.  */
++   __asm __volatile (
++	"	fsqrts	%0,%1\n"
++		: "=f" (z)
++		: "f" (x));
++
++  if (__builtin_expect (_LIB_VERSION == _IEEE_, 0))
++    return z;
++    
++  if (__builtin_expect (x != x, 0))
++    return z;
++    
++  if  (__builtin_expect (x < 0.0, 0))
++    /* sqrtf(negative) */
++    return (float) __kernel_standard ((double) x, (double) x, 126);
++  else
++    return z;
++#endif
++}
++
++weak_alias (__sqrtf, sqrtf)
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/fpu/w_sqrt.c.jj	2008-08-27 15:23:34.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/fpu/w_sqrt.c	2007-06-03 23:15:53.000000000 +0200
+@@ -0,0 +1,62 @@
++/* Double-precision floating point square root wrapper.
++   Copyright (C) 2004, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <math_ldbl_opt.h>
++#include "math.h"
++#include "math_private.h"
++#include <fenv_libc.h>
++
++#ifdef __STDC__
++double
++__sqrt (double x)		/* wrapper sqrt */
++#else
++double
++__sqrt (x)			/* wrapper sqrt */
++     double x;
++#endif
++{
++  double z;
++/* Power4 (ISA V2.0) and above implement sqrt in hardware.  */
++   __asm __volatile (
++	"	fsqrt	%0,%1\n"
++		: "=f" (z)
++		: "f" (x));
++#ifdef _IEEE_LIBM
++  return z;
++#else
++  if (__builtin_expect (_LIB_VERSION == _IEEE_, 0))
++    return z;
++    
++  if (__builtin_expect (x != x, 0))
++    return z;
++    
++  if  (__builtin_expect (x < 0.0, 0))
++    return __kernel_standard (x, x, 26);	/* sqrt(negative) */
++  else
++    return z;
++#endif
++}
++
++weak_alias (__sqrt, sqrt)
++#ifdef NO_LONG_DOUBLE
++  strong_alias (__sqrt, __sqrtl) weak_alias (__sqrt, sqrtl)
++#endif
++#if LONG_DOUBLE_COMPAT(libm, GLIBC_2_0)
++compat_symbol (libm, __sqrt, sqrtl, GLIBC_2_0);
++#endif
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power6/fpu/s_isnan.S.jj	2008-08-27 15:24:46.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power6/fpu/s_isnan.S	2008-04-10 07:58:59.000000000 +0200
+@@ -0,0 +1,60 @@
++/* isnan().  PowerPC64 version.
++   Copyright (C) 2008 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <sysdep.h>
++#include <math_ldbl_opt.h>
++
++/* int __isnan(x)  */
++	.machine power6
++EALIGN (__isnan, 4, 0)	
++	CALL_MCOUNT 0
++	stfd	fp1,-8(r1)	/* copy FPR to GPR */
++	ori	r1,r1,0
++	ld	r4,-8(r1)
++	lis	r0,0x7ff0
++	sldi	r0,r0,32	/* const long r0 0x7ff00000 00000000 */
++	clrldi	r4,r4,1		/* x = fabs(x) */
++	cmpd	cr7,r4,r0	/* if (fabs(x) <= inf) */
++	li	r3,0		/* then return 0 */
++	blelr+	cr7
++	li	r3,1		/* else return 1 */
++	blr
++	END (__isnan)
++
++hidden_def (__isnan)
++weak_alias (__isnan, isnan)
++
++/* It turns out that the 'double' version will also always work for
++   single-precision.  */
++strong_alias (__isnan, __isnanf)
++hidden_def (__isnanf)
++weak_alias (__isnanf, isnanf)
++
++#ifdef NO_LONG_DOUBLE
++strong_alias (__isnan, __isnanl)
++weak_alias (__isnan, isnanl)
++#endif
++
++#ifndef IS_IN_libm
++# if LONG_DOUBLE_COMPAT(libc, GLIBC_2_0)
++compat_symbol (libc, __isnan, __isnanl, GLIBC_2_0);
++compat_symbol (libc, isnan, isnanl, GLIBC_2_0);
++# endif
++#endif
++
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/powerpc64/fpu/w_sqrt.S.jj	2008-08-27 15:10:03.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/powerpc64/fpu/w_sqrt.S	2008-04-10 06:52:55.000000000 +0200
+@@ -0,0 +1,119 @@
++/* sqrt function.  PowerPC32 version.
++   Copyright (C) 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 1 Franklin Street, Fifth Floor, Boston MA
++   02110-1301 USA.  */
++
++#include <sysdep.h>
++#include <math_ldbl_opt.h>
++
++/* double [fp1] sqrt (double x [fp1])
++   Power4 (ISA V2.0) and above implement sqrt in hardware (not optional).
++   The fsqrt instruction generates the correct value for all inputs and
++   sets the appropriate floating point exceptions.  Extented checking is
++   only needed to set errno (via __kernel_standard) if the input value
++   is negative.
++   
++   The fsqrt will set FPCC and FU (Floating Point Unordered or NaN
++   to indicated that the input value was negative or NaN. Use Move to
++   Condition Register from FPSCR to copy the FPCC field to cr1.  The
++   branch on summary overflow transfers control to w_sqrt to process
++   any error conditions. Otherwise we can return the result directly.
++   
++   This part of the function is a leaf routine,  so no need to stack a
++   frame or execute prologue/epilogue code. This means it is safe to
++   transfer directly to w_sqrt as long as the input value (f1) is
++   preserved. Putting the the sqrt result into f2 (double parameter 2)
++   allows passing both the input value and sqrt result into the extended
++   wrapper so there is no need to recompute.
++   
++   This tactic avoids the overhead of stacking a frame for the normal
++   (non-error) case.  Until gcc supports prologue shrink-wrapping
++   this is the best we can do.  */
++
++	.section	".text"
++	.machine power4
++EALIGN (__sqrt, 5, 0)
++	fsqrt	fp2,fp1
++	mcrfs	cr1,4
++	bso-	cr1,.Lw_sqrt
++	fmr	fp1,fp2
++	blr
++	.align	4
++.Lw_sqrt:
++	mflr	r0
++	stwu	r1,-16(r1)
++	cfi_adjust_cfa_offset(16)
++	fmr	fp12,fp2
++	stw	r0,20(r1)
++	stw	r30,8(r1)
++	cfi_offset(lr,20)
++	cfi_offset(r30,8)
++#ifdef SHARED
++# ifdef HAVE_ASM_PPC_REL16
++	bcl	20,31,.LCF1
++.LCF1:
++	mflr	r30
++	addis	r30,r30,_GLOBAL_OFFSET_TABLE_-.LCF1@ha
++	addi	r30,r30,_GLOBAL_OFFSET_TABLE_-.LCF1@l
++	lwz	r9,_LIB_VERSION@got(30)
++	lwz	r0,0(r9)
++# else
++	bl	_GLOBAL_OFFSET_TABLE_@local-4
++	mflr	r30
++	lwz	r9,_LIB_VERSION@got(30)
++	lwz	r0,0(r9)
++# endif
++#else
++	lis	r9,_LIB_VERSION@ha
++	lwz	r0,_LIB_VERSION@l(r9)
++#endif
++/*  if (_LIB_VERSION == _IEEE_) return z; */
++	cmpwi	cr7,r0,-1
++	beq-	cr7,.L4
++/*  if (x != x) return z; !isnan*/
++	fcmpu	cr7,fp1,fp1
++	bne-	cr7,.L4
++/*  if  (x < 0.0)
++    return __kernel_standard (x, x, 26) */
++	fmr	fp2,fp1
++	fabs	fp0,fp1
++	li	r3,26
++	fcmpu	cr7,fp1,fp0
++	bne- 	cr7,.L11
++.L4:
++	lwz	r0,20(r1)
++	fmr	fp1,fp12
++	lwz	r30,8(r1)
++	addi	r1,r1,16
++	mtlr 	r0
++	blr
++.L11:
++	bl	__kernel_standard@plt
++	fmr	fp12,fp1
++	b	.L4
++	END	(__sqrt)
++
++weak_alias (__sqrt, sqrt)
++
++#ifdef NO_LONG_DOUBLE
++weak_alias (__sqrt, sqrtl)
++strong_alias (__sqrt, __sqrtl)
++#endif
++#if LONG_DOUBLE_COMPAT(libm, GLIBC_2_0)
++compat_symbol (libm, __sqrt, sqrtl, GLIBC_2_0)
++#endif
++
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/powerpc64/fpu/w_sqrtf.S.jj	2008-08-27 15:10:06.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/powerpc64/fpu/w_sqrtf.S	2008-04-10 06:53:05.000000000 +0200
+@@ -0,0 +1,111 @@
++/* sqrtf function.  PowerPC32 version.
++   Copyright (C) 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 1 Franklin Street, Fifth Floor, Boston MA
++   02110-1301 USA.  */
++
++#include <sysdep.h>
++#include <math_ldbl_opt.h>
++
++/* float [fp1] sqrts (float x [fp1])
++   Power4 (ISA V2.0) and above implement sqrt in hardware (not optional).
++   The fsqrts instruction generates the correct value for all inputs and
++   sets the appropriate floating point exceptions.  Extented checking is
++   only needed to set errno (via __kernel_standard) if the input value
++   is negative.
++   
++   The fsqrts will set FPCC and FU (Floating Point Unordered or NaN
++   to indicated that the input value was negative or NaN. Use Move to
++   Condition Register from FPSCR to copy the FPCC field to cr1.  The
++   branch on summary overflow transfers control to w_sqrt to process
++   any error conditions. Otherwise we can return the result directly.
++   
++   This part of the function is a leaf routine,  so no need to stack a
++   frame or execute prologue/epilogue code. This means it is safe to
++   transfer directly to w_sqrt as long as the input value (f1) is
++   preserved. Putting the the sqrt result into f2 (float parameter 2)
++   allows passing both the input value and sqrt result into the extended
++   wrapper so there is no need to recompute.
++   
++   This tactic avoids the overhead of stacking a frame for the normal
++   (non-error) case.  Until gcc supports prologue shrink-wrapping
++   this is the best we can do.  */
++
++	.section	".text"
++	.machine power4
++EALIGN (__sqrtf, 5, 0)
++	fsqrts	fp2,fp1
++	mcrfs	cr1,4
++	bso-	cr1,.Lw_sqrtf
++	fmr	fp1,fp2
++	blr
++        .align 4
++.Lw_sqrtf:
++	mflr	r0
++	stwu	r1,-16(r1)
++	cfi_adjust_cfa_offset(16)
++	fmr	fp12,fp2
++	stw	r0,20(r1)
++	stw	r30,8(r1)
++	cfi_offset(lr,20)
++	cfi_offset(r30,8)
++#ifdef SHARED
++# ifdef HAVE_ASM_PPC_REL16
++	bcl	20,31,.LCF1
++.LCF1:
++	mflr	r30
++	addis	r30,r30,_GLOBAL_OFFSET_TABLE_-.LCF1@ha
++	addi	r30,r30,_GLOBAL_OFFSET_TABLE_-.LCF1@l
++	lwz	r9,_LIB_VERSION@got(30)
++	lwz	r0,0(r9)
++# else
++	bl	_GLOBAL_OFFSET_TABLE_@local-4
++	mflr	r30
++	lwz	r9,_LIB_VERSION@got(30)
++	lwz	r0,0(r9)
++# endif
++#else
++	lis	r9,_LIB_VERSION@ha
++	lwz	r0,_LIB_VERSION@l(r9)
++#endif
++/*  if (_LIB_VERSION == _IEEE_) return z; */
++	cmpwi	cr7,r0,-1
++	beq-	cr7,.L4
++/*  if (x != x, 0) return z; !isnan */
++	fcmpu	cr7,fp1,fp1
++	bne-	cr7,.L4
++/*  if  (x < 0.0)
++    return __kernel_standard (x, x, 126) */
++	fmr	fp2,fp1
++	fabs	fp0,fp1
++	li	r3,126
++	fcmpu	cr7,1,0
++	bne- 	cr7,.L11
++.L4:
++	lwz	r0,20(r1)
++	fmr	fp1,fp12
++	lwz	r30,8(r1)
++	addi	r1,r1,16
++	mtlr 	r0
++	blr
++.L11:
++	bl	__kernel_standard@plt
++	fmr	fp12,fp1
++	b	.L4
++	END	(__sqrtf)
++
++weak_alias (__sqrtf, sqrtf)
++
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/powerpc64/fpu/s_llround.S.jj	2008-08-27 11:00:42.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/powerpc64/fpu/s_llround.S	2008-08-13 14:05:38.000000000 +0200
+@@ -1,5 +1,5 @@
+ /* llround function.  PowerPC32 on PowerPC64 version.
+-   Copyright (C) 2004, 2006 Free Software Foundation, Inc.
++   Copyright (C) 2004, 2006, 2007, 2008 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+ 
+    The GNU C Library is free software; you can redistribute it and/or
+@@ -20,15 +20,15 @@
+ #include <sysdep.h>
+ #include <math_ldbl_opt.h>
+ 
+-	.section	.rodata.cst8,"aM",@progbits,8
+-	.align	2
+-.LC0:	/* 0.0 */
++ .section .rodata.cst12,"aM",@progbits,12
++ .align 3
++ .LC0:   /* 0x1.0000000000000p+52 == 2^52 */
++	.long 0x43300000
+ 	.long 0x00000000
+-.LC1:	/* 0.5 */
+-	.long 0x3f000000
++	.long 0x3f000000 /* Use this for 0.5  */
+ 
+ 	.section	".text"
+-	
++
+ /* long [r3] lround (float x [fp1])
+    IEEE 1003.1 lround function.  IEEE specifies "round to the nearest 
+    integer value, rounding halfway cases away from zero, regardless of
+@@ -37,7 +37,15 @@
+    tie, choose the one that is even (least significant bit o).". 
+    So we can't use the PowerPC "round to Nearest" mode. Instead we set
+    "round toward Zero" mode and round by adding +-0.5 before rounding
+-   to the integer value.  */
++   to the integer value.
++
++   It is necessary to detect when x is (+-)0x1.fffffffffffffp-2
++   because adding +-0.5 in this case will cause an erroneous shift,
++   carry and round.  We simply return 0 if 0.5 > x > -0.5.  Likewise
++   if x is and odd number between +-(2^52 and 2^53-1) a shift and
++   carry will erroneously round if biased with +-0.5.  Therefore if x
++   is greater/less than +-2^52 we don't need to bias the number with
++   +-0.5.  */
+ 
+ ENTRY (__llround)
+ 	stwu    r1,-16(r1)
+@@ -57,30 +65,41 @@ ENTRY (__llround)
+ # endif
+ 	mtlr	r11
+ 	cfi_same_value (lr)
+-	lfs	fp12,0(r9)
+-	lfs	fp10,.LC1-.LC0(r9)
++	lfd	fp9,0(r9)
++	lfs	fp10,8(r9)
+ #else
+-	lis	r9,.LC0@ha
+-	lis	r10,.LC1@ha
+-	lfs	fp12,.LC0@l(r9)
+-	lfs	fp10,.LC1@l(r10)
++	lis r9,.LC0@ha
++	lfd fp9,.LC0@l(r9)	/* Load 2^52 into fpr9.  */
++	lfs fp10,.LC0@l+8(r9)	/* Load 0.5 into fpr10.  */
+ #endif
+-	fcmpu	cr6,fp1,fp12	/* if (x > 0.0)  */
+-	ble-	cr6,.L4
+-	fadd	fp1,fp1,fp10	/* x+= 0.5;  */
+-.L9:
+-	fctidz	fp2,fp1		/* Convert To Integer DW round toward 0.  */
+-	stfd	fp2,8(r1)
+-	nop	/* Ensure the following load is in a different dispatch  */
+-	nop	/* group to avoid pipe stall on POWER4&5.  */
++	fabs	fp2,fp1		/* Get the absolute value of x.  */
++	fsub	fp12,fp10,fp10	/* Compute 0.0 into fpr12.  */
++	fcmpu	cr6,fp2,fp10	/* if |x| < 0.5  */
++	fcmpu	cr7,fp2,fp9	/* if |x| >= 2^52  */
++	fcmpu	cr1,fp1,fp12	/* x is negative? x < 0.0  */
++	blt-	cr6,.Lretzero	/* 0.5 > x < -0.5 so just return 0.  */
++	bge-	cr7,.Lnobias	/* 2^52 > x < -2^52 just convert with no bias.  */
++	fadd	fp3,fp2,fp10	/* |x|+=0.5 bias to prepare to round.  */
++	bge	cr1,.Lconvert	/* x is positive so don't negate x.  */
++	fnabs	fp3,fp3		/* -(|x|+=0.5)  */
++.Lconvert:
++	fctidz	fp4,fp3		/* Convert to Integer double word round toward 0.  */
++	stfd	fp4,8(r1)
++	nop
++	nop
+ 	nop
+-	lwz	r4,12(r1)
++	lwz	r4,12(r1)	/* Load return as integer.  */
+ 	lwz	r3,8(r1)
++.Lout:
+ 	addi	r1,r1,16
+ 	blr
+-.L4:
+-	fsub	fp1,fp1,fp10	/* x-= 0.5;  */
+-	b	.L9
++.Lretzero:			/* 0.5 > x > -0.5  */
++	li	r3,0		/* return 0.  */
++	li	r4,0
++	b	.Lout
++.Lnobias:
++	fmr	fp3,fp1
++	b	.Lconvert
+ 	END (__llround)
+ 
+ weak_alias (__llround, llround)
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_isnan.S.jj	2008-08-27 15:18:02.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_isnan.S	2008-04-10 07:58:20.000000000 +0200
+@@ -0,0 +1,62 @@
++/* isnan().  PowerPC32 version.
++   Copyright (C) 2008 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <sysdep.h>
++#include <math_ldbl_opt.h>
++
++/* int __isnan(x)  */
++	.machine power6
++EALIGN (__isnan, 4, 0)
++	stwu	r1,-32(r1)
++	cfi_adjust_cfa_offset (32)
++	ori	r1,r1,0
++	stfd	fp1,24(r1)	/* copy FPR to GPR */
++	ori	r1,r1,0
++	lwz	r4,24(r1)
++	lwz	r5,28(r1)
++	lis	r0,0x7ff0	/* const long r0 0x7ff00000 00000000 */
++	clrlwi	r4,r4,1		/* x = fabs(x) */
++	cmpw	cr7,r4,r0	/* if (fabs(x) =< inf) */
++	cmpwi	cr6,r5,0
++	li	r3,0		/* then return 0 */
++	addi	r1,r1,32
++	cfi_adjust_cfa_offset (-32)
++	bltlr+	cr7
++	bgt-	cr7,L(NaN)
++	beqlr+	cr6
++L(NaN):
++	li	r3,1		/* else return 1 */
++	blr
++	END (__isnan)
++
++hidden_def (__isnan)
++weak_alias (__isnan, isnan)
++
++#ifdef NO_LONG_DOUBLE
++strong_alias (__isnan, __isnanl)
++weak_alias (__isnan, isnanl)
++#endif
++
++#ifndef IS_IN_libm
++# if LONG_DOUBLE_COMPAT(libc, GLIBC_2_0)
++compat_symbol (libc, __isnan, __isnanl, GLIBC_2_0);
++compat_symbol (libc, isnan, isnanl, GLIBC_2_0);
++# endif
++#endif
++
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_isnanf.S.jj	2008-08-27 15:18:05.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_isnanf.S	2008-04-10 07:58:33.000000000 +0200
+@@ -0,0 +1,46 @@
++/* isnanf().  PowerPC32 version.
++   Copyright (C) 2008 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <sysdep.h>
++#include <math_ldbl_opt.h>
++
++/* int __isnanf(x)  */
++	.machine power6
++EALIGN (__isnanf, 4, 0)
++	stwu	r1,-32(r1)
++	cfi_adjust_cfa_offset (32)
++	ori	r1,r1,0
++	stfs	fp1,24(r1)	/* copy FPR to GPR */
++	ori	r1,r1,0
++	lwz	r4,24(r1)
++	lis	r0,0x7f80	/* const long r0 0x7f800000 */
++	clrlwi	r4,r4,1		/* x = fabs(x) */
++	cmpw	cr7,r4,r0	/* if (fabs(x) =< inf) */
++	li	r3,0		/* then return 0 */
++	addi	r1,r1,32
++	cfi_adjust_cfa_offset (-32)
++	blelr+	cr7
++L(NaN):
++	li	r3,1		/* else return 1 */
++	blr
++	END (__isnan)
++
++hidden_def (__isnanf)
++weak_alias (__isnanf, isnanf)
++
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_llroundf.S.jj	2008-08-27 11:00:43.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_llroundf.S	2008-08-27 15:20:38.000000000 +0200
+@@ -1,2 +1 @@
+ /* __llroundf is in s_llround.S  */
+-/* __llroundf is in s_llround.S  */
+--- libc/sysdeps/powerpc/powerpc64/fpu/s_isnan.c.jj	2006-01-28 01:07:31.000000000 +0100
++++ libc/sysdeps/powerpc/powerpc64/fpu/s_isnan.c	2008-08-27 15:15:44.000000000 +0200
+@@ -1,7 +0,0 @@
+-#include <sysdeps/powerpc/fpu/s_isnan.c>
+-#ifndef IS_IN_libm
+-# if LONG_DOUBLE_COMPAT(libc, GLIBC_2_0)
+-compat_symbol (libc, __isnan, __isnanl, GLIBC_2_0);
+-compat_symbol (libc, isnan, isnanl, GLIBC_2_0);
+-# endif
+-#endif
+--- libc/sysdeps/powerpc/powerpc64/fpu/s_isnan.S.jj	2008-08-27 15:15:50.000000000 +0200
++++ libc/sysdeps/powerpc/powerpc64/fpu/s_isnan.S	2008-04-10 16:15:43.000000000 +0200
+@@ -0,0 +1,57 @@
++/* isnan().  PowerPC64 version.
++   Copyright (C) 2008 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <sysdep.h>
++#include <math_ldbl_opt.h>
++
++/* int __isnan(x)  */
++	.machine power4
++EALIGN (__isnan, 4, 0)	
++	CALL_MCOUNT 0
++	mffs	fp0
++	mtfsb0	4*cr6+lt /* reset_fpscr_bit (FPSCR_VE) */
++	fcmpu	cr7,fp1,fp1
++	mtfsf	255,fp0
++	li	r3,0
++	beqlr+	cr7	/* (x == x) then not a NAN */
++	li	r3,1	/* else must be a NAN */
++	blr
++	END (__isnan)
++
++hidden_def (__isnan)
++weak_alias (__isnan, isnan)
++
++/* It turns out that the 'double' version will also always work for
++   single-precision.  */
++strong_alias (__isnan, __isnanf)
++hidden_def (__isnanf)
++weak_alias (__isnanf, isnanf)
++
++#ifdef NO_LONG_DOUBLE
++strong_alias (__isnan, __isnanl)
++weak_alias (__isnan, isnanl)
++#endif
++
++#ifndef IS_IN_libm
++# if LONG_DOUBLE_COMPAT(libc, GLIBC_2_0)
++compat_symbol (libc, __isnan, __isnanl, GLIBC_2_0);
++compat_symbol (libc, isnan, isnanl, GLIBC_2_0);
++# endif
++#endif
++
+--- libc/sysdeps/powerpc/powerpc64/fpu/s_llround.S.jj	2006-01-28 01:07:40.000000000 +0100
++++ libc/sysdeps/powerpc/powerpc64/fpu/s_llround.S	2008-08-13 14:05:38.000000000 +0200
+@@ -1,5 +1,5 @@
+ /* llround function.  PowerPC64 version.
+-   Copyright (C) 2004, 2006 Free Software Foundation, Inc.
++   Copyright (C) 2004, 2006, 2007, 2008 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+ 
+    The GNU C Library is free software; you can redistribute it and/or
+@@ -21,13 +21,13 @@
+ #include <math_ldbl_opt.h>
+ 
+ 	.section	".toc","aw"
+-.LC0:	/* -0.0 */
+-	.tc FD_00000000_0[TC],0x0000000000000000
++.LC0:	/* 2^52 */
++	.tc FD_43300000_0[TC],0x4330000000000000
+ .LC1:	/* 0.5 */
+ 	.tc FD_3fe00000_0[TC],0x3fe0000000000000
+ 	.section	".text"
+ 	
+-/* long long [r3] llround (float x [fp1])
++/* long long [r3] llround (double x [fp1])
+    IEEE 1003.1 llround function.  IEEE specifies "round to the nearest 
+    integer value, rounding halfway cases away from zero, regardless of
+    the current rounding mode."  However PowerPC Architecture defines
+@@ -35,26 +35,45 @@
+    tie, choose the one that is even (least significant bit o).". 
+    So we can't use the PowerPC "round to Nearest" mode. Instead we set
+    "round toward Zero" mode and round by adding +-0.5 before rounding
+-   to the integer value.  */
++   to the integer value.
++
++   It is necessary to detect when x is (+-)0x1.fffffffffffffp-2
++   because adding +-0.5 in this case will cause an erroneous shift,
++   carry and round.  We simply return 0 if 0.5 > x > -0.5.  Likewise
++   if x is and odd number between +-(2^52 and 2^53-1) a shift and
++   carry will erroneously round if biased with +-0.5.  Therefore if x
++   is greater/less than +-2^52 we don't need to bias the number with
++   +-0.5.  */
+ 
+ ENTRY (__llround)
+ 	CALL_MCOUNT 0
+-	lfd	fp12,.LC0@toc(2)
+-	lfd	fp10,.LC1@toc(2)
+-	fcmpu	cr6,fp1,fp12	/* if (x > 0.0)  */
+-	ble-	cr6,.L4
+-	fadd	fp1,fp1,fp10	/* x+= 0.5;  */
+-.L9:
+-	fctidz	fp2,fp1		/* Convert To Integer DW llround toward 0.  */
+-	stfd	fp2,-16(r1)
+-	nop	/* Insure the following load is in a different dispatch group */
+-	nop	/* to avoid pipe stall on POWER4&5.  */
++	lfd	fp9,.LC0@toc(2)	/* Load 2^52 into fpr9.  */
++	lfd	fp10,.LC1@toc(2)/* Load 0.5 into fpr10.  */
++	fabs	fp2,fp1		/* Get the absolute value of x.  */
++	fsub	fp12,fp10,fp10	/* Compute 0.0 into fp12.  */
++	fcmpu	cr6,fp2,fp10	/* if |x| < 0.5  */
++	fcmpu	cr7,fp2,fp9	/* if |x| >= 2^52  */
++	fcmpu	cr1,fp1,fp12	/* x is negative? x < 0.0  */
++	blt-	cr6,.Lretzero	/* 0.5 > x < -0.5 so just return 0.  */
++	bge-	cr7,.Lnobias	/* 2^52 > x < -2^52 just convert with no bias.  */
++	fadd	fp3,fp2,fp10	/* |x|+=0.5 bias to prepare to round.  */
++	bge	cr1,.Lconvert	/* x is positive so don't negate x.  */
++	fnabs	fp3,fp3		/* -(|x|+=0.5)  */
++.Lconvert:
++	fctidz	fp4,fp3		/* Convert to Integer double word round toward 0.  */
++	stfd	fp4,-16(r1)
++	nop
++	nop
+ 	nop
+-	ld	r3,-16(r1)
++	ld	r3,-16(r1)	/* Load return as integer.  */
++.Lout:
+ 	blr
+-.L4:
+-	fsub	fp1,fp1,fp10	/* x-= 0.5;  */
+-	b	.L9
++.Lretzero:			/* 0.5 > x > -0.5  */
++	li	r3,0		/* return 0.  */
++	b	.Lout
++.Lnobias:
++	fmr	fp3,fp1
++	b	.Lconvert
+ 	END (__llround)
+ 
+ strong_alias (__llround, __lround)
+--- libc/sysdeps/powerpc/powerpc64/fpu/s_llroundf.S.jj	2006-01-28 01:14:39.000000000 +0100
++++ libc/sysdeps/powerpc/powerpc64/fpu/s_llroundf.S	2008-08-13 14:05:38.000000000 +0200
+@@ -1,5 +1,5 @@
+ /* llroundf function.  PowerPC64 version.
+-   Copyright (C) 2004, 2006 Free Software Foundation, Inc.
++   Copyright (C) 2004, 2006, 2007, 2008 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+ 
+    The GNU C Library is free software; you can redistribute it and/or
+@@ -20,8 +20,8 @@
+ #include <sysdep.h>
+ 
+ 	.section	".toc","aw"
+-.LC0:	/* -0.0 */
+-	.tc FD_00000000_0[TC],0x0000000000000000
++.LC0:	/* 2^23 */
++	.tc FD_41600000_0[TC],0x4160000000000000
+ .LC1:	/* 0.5 */
+ 	.tc FD_3fe00000_0[TC],0x3fe0000000000000
+ 	.section	".text"
+@@ -34,24 +34,45 @@
+    tie, choose the one that is even (least significant bit o).". 
+    So we can't use the PowerPC "round to Nearest" mode. Instead we set
+    "round toward Zero" mode and round by adding +-0.5 before rounding
+-   to the integer value.  */
++   to the integer value.
++
++   It is necessary to detect when x is (+-)0x1.fffffffffffffp-2
++   because adding +-0.5 in this case will cause an erroneous shift,
++   carry and round.  We simply return 0 if 0.5 > x > -0.5.  Likewise
++   if x is and odd number between +-(2^23 and 2^24-1) a shift and
++   carry will erroneously round if biased with +-0.5.  Therefore if x
++   is greater/less than +-2^23 we don't need to bias the number with
++   +-0.5.  */
+ 
+ ENTRY (__llroundf)
+ 	CALL_MCOUNT 0
+-	lfd	fp12,.LC0@toc(2)
+-	lfd	fp10,.LC1@toc(2)
+-	fcmpu	cr6,fp1,fp12	/* if (x < 0.0)  */
+-	fsubs	fp3,fp1,fp10	/* x-= 0.5;  */
+-	ble-	cr6,.L9
+-	fadds	fp3,fp1,fp10	/* x+= 0.5;  */
+-.L9:
+-	fctidz	fp2,fp3		/* Convert To Integer DW round toward 0.  */
+-	stfd	fp2,-16(r1)
+-	nop	/* Insure the following load is in a different dispatch group */
+-	nop	/* to avoid pipe stall on POWER4&5.  */
++	lfd	fp9,.LC0@toc(2)	/* Load 2^23 into fpr9.  */
++	lfd	fp10,.LC1@toc(2)/* Load 0.5 into fpr10.  */
++	fabs	fp2,fp1		/* Get the absolute value of x.  */
++	fsub	fp12,fp10,fp10	/* Compute 0.0 into fp12.  */
++	fcmpu	cr6,fp2,fp10	/* if |x| < 0.5  */
++	fcmpu	cr7,fp2,fp9	/* if |x| >= 2^23  */
++	fcmpu	cr1,fp1,fp12	/* x is negative? x < 0.0  */
++	blt-	cr6,.Lretzero	/* 0.5 > x < -0.5 so just return 0.  */
++	bge-	cr7,.Lnobias	/* 2^23 > x < -2^23 just convert with no bias.  */
++	fadd	fp3,fp2,fp10	/* |x|+=0.5 bias to prepare to round.  */
++	bge	cr1,.Lconvert	/* x is positive so don't negate x.  */
++	fnabs	fp3,fp3		/* -(|x|+=0.5)  */
++.Lconvert:
++	fctidz	fp4,fp3		/* Convert to Integer double word round toward 0.  */
++	stfd	fp4,-16(r1)
++	nop
++	nop
+ 	nop
+-	ld	r3,-16(r1)
++	ld	r3,-16(r1)	/* Load return as integer.  */
++.Lout:
+ 	blr
++.Lretzero:			/* 0.5 > x > -0.5  */
++	li	r3,0		/* return 0.  */
++	b	.Lout
++.Lnobias:
++	fmr	fp3,fp1
++	b	.Lconvert
+ 	END (__llroundf)
+ 
+ strong_alias (__llroundf, __lroundf)
+--- libc/sysdeps/powerpc/powerpc32/fpu/s_isnan.c.jj	2006-01-28 01:07:27.000000000 +0100
++++ libc/sysdeps/powerpc/powerpc32/fpu/s_isnan.c	2008-08-27 15:15:14.000000000 +0200
+@@ -1,7 +0,0 @@
+-#include <sysdeps/powerpc/fpu/s_isnan.c>
+-#ifndef IS_IN_libm
+-# if LONG_DOUBLE_COMPAT(libc, GLIBC_2_0)
+-compat_symbol (libc, __isnan, __isnanl, GLIBC_2_0);
+-compat_symbol (libc, isnan, isnanl, GLIBC_2_0);
+-# endif
+-#endif
+--- libc/sysdeps/powerpc/powerpc32/fpu/s_lround.S.jj	2006-01-28 01:07:39.000000000 +0100
++++ libc/sysdeps/powerpc/powerpc32/fpu/s_lround.S	2008-08-13 14:05:38.000000000 +0200
+@@ -1,5 +1,5 @@
+ /* lround function.  PowerPC32 version.
+-   Copyright (C) 2004, 2006 Free Software Foundation, Inc.
++   Copyright (C) 2004, 2006, 2007, 2008 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+ 
+    The GNU C Library is free software; you can redistribute it and/or
+@@ -20,13 +20,10 @@
+ #include <sysdep.h>
+ #include <math_ldbl_opt.h>
+ 
+-	.section	.rodata.cst8,"aM",@progbits,8
++	.section	.rodata.cst4,"aM",@progbits,4
+ 	.align	2
+-.LC0:	/* 0.0 */
+-	.long 0x00000000
+-.LC1:	/* 0.5 */
++.LC0:	/* 0.5 */
+ 	.long 0x3f000000
+-
+ 	.section	".text"
+ 	
+ /* long [r3] lround (float x [fp1])
+@@ -37,7 +34,10 @@
+    tie, choose the one that is even (least significant bit o).". 
+    So we can't use the PowerPC "round to Nearest" mode. Instead we set
+    "round toward Zero" mode and round by adding +-0.5 before rounding
+-   to the integer value.  */
++   to the integer value.  It is necessary to detect when x is
++   (+-)0x1.fffffffffffffp-2 because adding +-0.5 in this case will
++   cause an erroneous shift, carry and round.  We simply return 0 if
++   0.5 > x > -0.5.  */
+ 
+ ENTRY (__lround)
+ 	stwu    r1,-16(r1)
+@@ -49,40 +49,40 @@ ENTRY (__lround)
+ 	bcl	20,31,1f
+ 1:	mflr	r9
+ 	addis	r9,r9,.LC0-1b@ha
+-	addi	r9,r9,.LC0-1b@l
++	lfs	fp10,.LC0-1b@l(r9)
+ # else
+ 	bl	_GLOBAL_OFFSET_TABLE_@local-4
+ 	mflr	r10
+ 	lwz	r9,.LC0@got(10)
++	lfs	fp10,0(r9)
+ # endif
+ 	mtlr	r11
+ 	cfi_same_value (lr)
+-	lfs	fp12,0(r9)
+ #else
+ 	lis	r9,.LC0@ha
+-	lfs	fp12,.LC0@l(r9)
+-#endif
+-#ifdef SHARED
+-	lfs	fp10,.LC1-.LC0(r9)
+-#else
+-	lis	r9,.LC1@ha
+-	lfs	fp10,.LC1@l(r9)
++	lfs	fp10,.LC0@l(r9)
+ #endif
+-	fcmpu	cr6,fp1,fp12	/* if (x > 0.0)  */
+-	ble-	cr6,.L4
+-	fadd	fp1,fp1,fp10	/* x+= 0.5;  */
+-.L9:
+-	fctiwz	fp2,fp1		/* Convert To Integer DW lround toward 0.  */
+-	stfd	fp2,8(r1)
++	fabs	fp2, fp1	/* Get the absolute value of x.  */
++	fsub	fp12,fp10,fp10	/* Compute 0.0.  */
++	fcmpu	cr6, fp2, fp10	/* if |x| < 0.5  */
++	fcmpu	cr7, fp1, fp12	/* x is negative? x < 0.0  */
++	blt-	cr6,.Lretzero
++	fadd	fp3,fp2,fp10	/* |x|+=0.5 bias to prepare to round.  */
++	bge	cr7,.Lconvert	/* x is positive so don't negate x.  */
++	fnabs	fp3,fp3		/* -(|x|+=0.5)  */ 
++.Lconvert:
++	fctiwz	fp4,fp3		/* Convert to Integer word lround toward 0.  */
++	stfd	fp4,8(r1)
+ 	nop	/* Ensure the following load is in a different dispatch  */
+ 	nop	/* group to avoid pipe stall on POWER4&5.  */
+ 	nop
+-	lwz	r3,12(r1)
++	lwz	r3,12(r1)	/* Load return as integer.  */
++.Lout:
+ 	addi	r1,r1,16
+ 	blr
+-.L4:
+-	fsub	fp1,fp1,fp10	/* x-= 0.5;  */
+-	b	.L9
++.Lretzero:			/* when 0.5 > x > -0.5  */
++	li	r3,0		/* return 0.  */
++	b	.Lout
+ 	END (__lround)
+ 
+ weak_alias (__lround, lround)
+--- libc/sysdeps/powerpc/powerpc32/fpu/s_isnan.S.jj	2008-08-27 15:15:21.000000000 +0200
++++ libc/sysdeps/powerpc/powerpc32/fpu/s_isnan.S	2008-04-10 16:15:27.000000000 +0200
+@@ -0,0 +1,56 @@
++/* isnan().  PowerPC32 version.
++   Copyright (C) 2008 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <sysdep.h>
++#include <math_ldbl_opt.h>
++
++/* int __isnan(x)  */
++	.machine power4
++EALIGN (__isnan, 4, 0)	
++	mffs	fp0
++	mtfsb0	4*cr6+lt /* reset_fpscr_bit (FPSCR_VE) */
++	fcmpu	cr7,fp1,fp1
++	mtfsf	255,fp0
++	li	r3,0
++	beqlr+	cr7	/* (x == x) then not a NAN */
++	li	r3,1	/* else must be a NAN */
++	blr
++	END (__isnan)
++
++hidden_def (__isnan)
++weak_alias (__isnan, isnan)
++
++/* It turns out that the 'double' version will also always work for
++   single-precision.  */
++strong_alias (__isnan, __isnanf)
++hidden_def (__isnanf)
++weak_alias (__isnanf, isnanf)
++
++#ifdef NO_LONG_DOUBLE
++strong_alias (__isnan, __isnanl)
++weak_alias (__isnan, isnanl)
++#endif
++
++#ifndef IS_IN_libm
++# if LONG_DOUBLE_COMPAT(libc, GLIBC_2_0)
++compat_symbol (libc, __isnan, __isnanl, GLIBC_2_0);
++compat_symbol (libc, isnan, isnanl, GLIBC_2_0);
++# endif
++#endif
++
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/powerpc64/fpu/slowexp.c	2008-05-09 14:58:04.646001045 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/powerpc64/fpu/slowexp.c	2007-06-03 22:51:17.000000000 +0200
+@@ -0,0 +1,66 @@
++/*
++ * IBM Accurate Mathematical Library
++ * written by International Business Machines Corp.
++ * Copyright (C) 2001, 2007 Free Software Foundation
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License as published by
++ * the Free Software Foundation; either version 2.1 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
++ */
++/**************************************************************************/
++/*  MODULE_NAME:slowexp.c                                                 */
++/*                                                                        */
++/*  FUNCTION:slowexp                                                      */
++/*                                                                        */
++/*  FILES NEEDED:mpa.h                                                    */
++/*               mpa.c mpexp.c                                            */
++/*                                                                        */
++/*Converting from double precision to Multi-precision and calculating     */
++/* e^x                                                                    */
++/**************************************************************************/
++#include "math_private.h"
++
++#ifdef NO_LONG_DOUBLE
++#include "mpa.h"
++void __mpexp(mp_no *x, mp_no *y, int p);
++#endif
++
++/*Converting from double precision to Multi-precision and calculating  e^x */
++double __slowexp(double x) {
++#ifdef NO_LONG_DOUBLE
++  double w,z,res,eps=3.0e-26;
++  int p;
++  mp_no mpx, mpy, mpz,mpw,mpeps,mpcor;
++
++  p=6;
++  __dbl_mp(x,&mpx,p); /* Convert a double precision number  x               */
++                    /* into a multiple precision number mpx with prec. p. */
++  __mpexp(&mpx, &mpy, p); /* Multi-Precision exponential function */
++  __dbl_mp(eps,&mpeps,p);
++  __mul(&mpeps,&mpy,&mpcor,p);
++  __add(&mpy,&mpcor,&mpw,p);
++  __sub(&mpy,&mpcor,&mpz,p);
++  __mp_dbl(&mpw, &w, p);
++  __mp_dbl(&mpz, &z, p);
++  if (w == z) return w;
++  else  {                   /* if calculating is not exactly   */
++    p = 32;
++    __dbl_mp(x,&mpx,p);
++    __mpexp(&mpx, &mpy, p);
++    __mp_dbl(&mpy, &res, p);
++    return res;
++  }
++#else
++  return (double) __ieee754_expl((long double)x);
++#endif
++}
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/fpu/slowexp.c	2008-05-09 14:58:04.646001045 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/fpu/slowexp.c	2007-06-03 22:51:17.000000000 +0200
+@@ -0,0 +1,66 @@
++/*
++ * IBM Accurate Mathematical Library
++ * written by International Business Machines Corp.
++ * Copyright (C) 2001, 2007 Free Software Foundation
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License as published by
++ * the Free Software Foundation; either version 2.1 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
++ */
++/**************************************************************************/
++/*  MODULE_NAME:slowexp.c                                                 */
++/*                                                                        */
++/*  FUNCTION:slowexp                                                      */
++/*                                                                        */
++/*  FILES NEEDED:mpa.h                                                    */
++/*               mpa.c mpexp.c                                            */
++/*                                                                        */
++/*Converting from double precision to Multi-precision and calculating     */
++/* e^x                                                                    */
++/**************************************************************************/
++#include "math_private.h"
++
++#ifdef NO_LONG_DOUBLE
++#include "mpa.h"
++void __mpexp(mp_no *x, mp_no *y, int p);
++#endif
++
++/*Converting from double precision to Multi-precision and calculating  e^x */
++double __slowexp(double x) {
++#ifdef NO_LONG_DOUBLE
++  double w,z,res,eps=3.0e-26;
++  int p;
++  mp_no mpx, mpy, mpz,mpw,mpeps,mpcor;
++
++  p=6;
++  __dbl_mp(x,&mpx,p); /* Convert a double precision number  x               */
++                    /* into a multiple precision number mpx with prec. p. */
++  __mpexp(&mpx, &mpy, p); /* Multi-Precision exponential function */
++  __dbl_mp(eps,&mpeps,p);
++  __mul(&mpeps,&mpy,&mpcor,p);
++  __add(&mpy,&mpcor,&mpw,p);
++  __sub(&mpy,&mpcor,&mpz,p);
++  __mp_dbl(&mpw, &w, p);
++  __mp_dbl(&mpz, &z, p);
++  if (w == z) return w;
++  else  {                   /* if calculating is not exactly   */
++    p = 32;
++    __dbl_mp(x,&mpx,p);
++    __mpexp(&mpx, &mpy, p);
++    __mp_dbl(&mpy, &res, p);
++    return res;
++  }
++#else
++  return (double) __ieee754_expl((long double)x);
++#endif
++}
+--- libc/math/libm-test.inc	24 Mar 2008 19:57:48 -0000	1.78
++++ libc/math/libm-test.inc	11 Apr 2008 19:32:30 -0000	1.79
+@@ -4300,6 +4300,17 @@ lround_test (void)
+ # endif
+   TEST_f_l (lround, 2097152.5, 2097153);
+   TEST_f_l (lround, -2097152.5, -2097153);
++  /* nextafter(0.5,-1)  */
++  TEST_f_l (lround, 0x1.fffffffffffffp-2, 0);
++  /* nextafter(-0.5,1)  */
++  TEST_f_l (lround, -0x1.fffffffffffffp-2, 0);
++#else
++  /* nextafter(0.5,-1)  */
++  TEST_f_l (lround, 0x1.fffffp-2, 0);
++  /* nextafter(-0.5,1)  */
++  TEST_f_l (lround, -0x1.fffffp-2, 0);
++  TEST_f_l (lround, 0x1.fffffep+23, 16777215);
++  TEST_f_l (lround, -0x1.fffffep+23, -16777215);
+ #endif
+   END (lround);
+ }
+@@ -4359,8 +4370,40 @@ llround_test (void)
+   TEST_f_L (llround, 4294967295.5, 4294967296LL);
+   /* 0x200000000 */
+   TEST_f_L (llround, 8589934591.5, 8589934592LL);
++
++  /* nextafter(0.5,-1)  */
++  TEST_f_L (llround, 0x1.fffffffffffffp-2, 0);
++  /* nextafter(-0.5,1)  */
++  TEST_f_L (llround, -0x1.fffffffffffffp-2, 0);
++  /* On PowerPC an exponent of '52' is the largest incrementally
++   * representable sequence of whole-numbers in the 'double' range.  We test
++   * lround to make sure that a guard bit set during the lround operation
++   * hasn't forced an erroneous shift giving us an incorrect result.  The odd
++   * numbers between +-(2^52+1 and 2^53-1) are affected since they have the
++   * rightmost bit set.  */
++  /* +-(2^52+1)  */
++  TEST_f_L (llround, 0x1.0000000000001p+52,4503599627370497LL);
++  TEST_f_L (llround, -0x1.0000000000001p+52,-4503599627370497LL);
++  /* +-(2^53-1): Input is the last (positive and negative) incrementally
++   * representable whole-number in the 'double' range that might round
++   * erroneously.  */
++  TEST_f_L (llround, 0x1.fffffffffffffp+52, 9007199254740991LL);
++  TEST_f_L (llround, -0x1.fffffffffffffp+52, -9007199254740991LL);
++#else
++  /* nextafter(0.5,-1)  */
++  TEST_f_L (llround, 0x1.fffffep-2, 0);
++  /* nextafter(-0.5,1)  */
++  TEST_f_L (llround, -0x1.fffffep-2, 0);
++  /* As above, on PowerPC an exponent of '23' is the largest incrementally
++   * representable sequence of whole-numbers in the 'float' range.
++   * Likewise, numbers between +-(2^23+1 and 2^24-1) are affected.  */
++  TEST_f_L (llround, 0x1.000002p+23,8388609);
++  TEST_f_L (llround, -0x1.000002p+23,-8388609);
++  TEST_f_L (llround, 0x1.fffffep+23, 16777215);
++  TEST_f_L (llround, -0x1.fffffep+23, -16777215);
+ #endif
+ 
++
+ #ifdef TEST_LDOUBLE
+   /* The input can only be represented in long double.  */
+   TEST_f_L (llround, 4503599627370495.5L, 4503599627370496LL);

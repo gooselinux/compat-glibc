@@ -1,0 +1,126 @@
+2008-10-31  Jakub Jelinek  <jakub@redhat.com>
+
+	* elf/dl-tls.c (__tls_get_addr): After calling _dl_update_slotinfo
+	refetch dtv, as it might have changed.
+	* elf/Makefile: Add rules to build and run tst-tls18.
+	* elf/tst-tls18.c: New test.
+	* elf/tst-tlsmod18a.c: New file.
+
+--- libc/elf/Makefile	17 Oct 2008 15:23:58 -0000	1.329
++++ libc/elf/Makefile	31 Oct 2008 20:35:11 -0000	1.330
+@@ -165,7 +165,7 @@ tests += loadtest restest1 preloadtest l
+ 	 restest2 next dblload dblunload reldep5 reldep6 reldep7 reldep8 \
+ 	 circleload1 tst-tls3 tst-tls4 tst-tls5 tst-tls6 tst-tls7 tst-tls8 \
+ 	 tst-tls10 tst-tls11 tst-tls12 tst-tls13 tst-tls14 tst-tls15 \
+-	 tst-tls17 tst-tls-dlinfo \
++	 tst-tls17 tst-tls18 tst-tls-dlinfo \
+ 	 tst-align tst-align2 $(tests-execstack-$(have-z-execstack)) \
+ 	 tst-dlmodcount tst-dlopenrpath tst-deep1 \
+ 	 tst-dlmopen1 tst-dlmopen2 tst-dlmopen3 \
+@@ -184,6 +184,7 @@ tests: $(objpfx)tst-pie1.out
+ endif
+ tests: $(objpfx)tst-leaks1-mem
+ tlsmod17a-suffixes = 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19
++tlsmod18a-suffixes = 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19
+ modules-names = testobj1 testobj2 testobj3 testobj4 testobj5 testobj6 \
+ 		testobj1_1 failobj constload2 constload3 unloadmod \
+ 		dep1 dep2 dep3 dep4 $(modules-vis-$(have-protected)) \
+@@ -204,6 +205,7 @@ modules-names = testobj1 testobj2 testob
+ 		tst-tlsmod15a tst-tlsmod15b \
+ 		$(patsubst %,tst-tlsmod17a%,$(tlsmod17a-suffixes)) \
+ 		tst-tlsmod17b \
++		$(patsubst %,tst-tlsmod18a%,$(tlsmod18a-suffixes)) \
+ 		circlemod1 circlemod1a circlemod2 circlemod2a \
+ 		circlemod3 circlemod3a \
+ 		reldep8mod1 reldep8mod2 reldep8mod3 \
+@@ -721,6 +723,12 @@ $(patsubst %,$(objpfx)tst-tlsmod17a%.os,
+ $(patsubst %,$(objpfx)tst-tlsmod17a%.so,$(tlsmod17a-suffixes)): $(objpfx)tst-tlsmod17a%.so: $(objpfx)ld.so
+ $(objpfx)tst-tlsmod17b.so: $(patsubst %,$(objpfx)tst-tlsmod17a%.so,$(tlsmod17a-suffixes))
+ 
++$(objpfx)tst-tls18: $(libdl)
++$(objpfx)tst-tls18.out: $(patsubst %,$(objpfx)tst-tlsmod18a%.so,$(tlsmod18a-suffixes))
++$(patsubst %,$(objpfx)tst-tlsmod18a%.os,$(tlsmod18a-suffixes)): $(objpfx)tst-tlsmod18a%.os : tst-tlsmod18a.c
++	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ -DN=$* -DNOT_IN_libc=1 $<
++$(patsubst %,$(objpfx)tst-tlsmod18a%.so,$(tlsmod18a-suffixes)): $(objpfx)tst-tlsmod18a%.so: $(objpfx)ld.so
++
+ CFLAGS-tst-align.c = $(stack-align-test-flags)
+ CFLAGS-tst-align2.c = $(stack-align-test-flags)
+ CFLAGS-tst-alignmod.c = $(stack-align-test-flags)
+--- libc/elf/dl-tls.c	16 Oct 2008 21:57:52 -0000	1.9
++++ libc/elf/dl-tls.c	31 Oct 2008 20:34:57 -0000	1.10
+@@ -756,7 +756,10 @@ __tls_get_addr (GET_ADDR_ARGS)
+   void *p;
+ 
+   if (__builtin_expect (dtv[0].counter != GL(dl_tls_generation), 0))
+-    the_map = _dl_update_slotinfo (GET_ADDR_MODULE);
++    {
++      the_map = _dl_update_slotinfo (GET_ADDR_MODULE);
++      dtv = THREAD_DTV ();
++    }
+ 
+   p = dtv[GET_ADDR_MODULE].pointer.val;
+ 
+--- libc/elf/tst-tls18.c	1 Jan 1970 00:00:00 -0000
++++ libc/elf/tst-tls18.c	31 Oct 2008 20:35:37 -0000	1.1
+@@ -0,0 +1,37 @@
++#include <dlfcn.h>
++#include <stdio.h>
++
++static int
++do_test (void)
++{
++  char modname[sizeof "tst-tlsmod18aXX.so"];
++  void *h[20];
++  for (int i = 0; i < 20; i++)
++    {
++      snprintf (modname, sizeof modname, "tst-tlsmod18a%d.so", i);
++      h[i] = dlopen (modname, RTLD_LAZY);
++      if (h[i] == NULL)
++	{
++	  printf ("unexpectedly failed to open %s", modname);
++	  exit (1);
++	}
++    }
++
++  for (int i = 0; i < 20; i++)
++    {
++      int (*fp) (void) = (int (*) (void)) dlsym (h[i], "test");
++      if (fp == NULL)
++	{
++	  printf ("cannot find test in tst-tlsmod18a%d.so", i);
++	  exit (1);
++	}
++
++      if (fp ())
++	exit (1);
++    }
++
++  return 0;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/elf/tst-tlsmod18a.c	1 Jan 1970 00:00:00 -0000
++++ libc/elf/tst-tlsmod18a.c	31 Oct 2008 20:49:59 -0000	1.1
+@@ -0,0 +1,21 @@
++#include <stdio.h>
++
++#ifndef N
++# define N 0
++#endif
++
++static __thread int var = 4;
++
++int
++test (void)
++{
++  int *p = &var;
++  /* GCC assumes &var is never NULL, add optimization barrier.  */
++  asm volatile ("" : "+r" (p));
++  if (p == NULL || *p != 4)
++    {
++      printf ("fail %d %p\n", N, p);
++      return 1;
++    }
++  return 0;
++}

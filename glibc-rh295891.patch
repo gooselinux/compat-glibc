@@ -1,0 +1,262 @@
+2007-09-19  Ulrich Drepper  <drepper@redhat.com>
+
+	* elf/dl-lookup.c (add_dependency): Handle failing memory
+	allocation for dependency list.  Remove unnecessary check.
+
+2007-09-18  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/generic/ldsodefs.h (DL_LOOKUP_GSCOPE_LOCK): New definition.
+	* elf/dl-runtime.c (_dl_fixup, _dl_profile_fixup): Or in
+	DL_LOOKUP_GSCOPE_LOCK into flags after THREAD_GSCOPE_SET_FLAG ().
+	* elf/dl-sym.c (do_sym): Likewise.
+	* include/link.h (struct link_map): Add l_serial field.
+	* elf/dl-object.c (_dl_new_object): Initialize l_serial.
+	* elf/dl-lookup.c (add_dependency): Add flags argument.
+	Remember map->l_serial, if DL_LOOKUP_GSCOPE_LOCK is among
+	flags, use THREAD_GSCOPE_RESET_FLAG before and
+	THREAD_GSCOPE_SET_FLAG after
+	__rtld_lock_lock_recursive (GL(dl_load_lock)) to avoid deadlock.
+	Don't dereference map until it has been found on some list.
+	If map->l_serial changed, return -1.
+
+--- libc/elf/dl-lookup.c	20 Jun 2007 03:18:30 -0000	1.128
++++ libc/elf/dl-lookup.c	19 Sep 2007 22:22:44 -0000	1.130
+@@ -86,36 +86,42 @@ dl_new_hash (const char *s)
+ /* Add extra dependency on MAP to UNDEF_MAP.  */
+ static int
+ internal_function
+-add_dependency (struct link_map *undef_map, struct link_map *map)
++add_dependency (struct link_map *undef_map, struct link_map *map, int flags)
+ {
+   struct link_map **list;
+   struct link_map *runp;
+   unsigned int act;
+   unsigned int i;
+   int result = 0;
++  unsigned long long int serial;
+ 
+   /* Avoid self-references and references to objects which cannot be
+      unloaded anyway.  */
+   if (undef_map == map)
+     return 0;
+ 
+-  /* Make sure nobody can unload the object while we are at it.  */
+-  __rtld_lock_lock_recursive (GL(dl_load_lock));
+-
+-  /* Avoid references to objects which cannot be unloaded anyway.  */
+-  if (map->l_type != lt_loaded
+-      || (map->l_flags_1 & DF_1_NODELETE) != 0)
+-    goto out;
++  /* Save serial number of the target MAP.  */
++  serial = map->l_serial;
+ 
+-  /* If the object with the undefined reference cannot be removed ever
+-     just make sure the same is true for the object which contains the
+-     definition.  */
+-  if (undef_map->l_type != lt_loaded
+-      || (undef_map->l_flags_1 & DF_1_NODELETE) != 0)
++  /* Make sure nobody can unload the object while we are at it.  */
++  if (__builtin_expect (flags & DL_LOOKUP_GSCOPE_LOCK, 0))
+     {
+-      map->l_flags_1 |= DF_1_NODELETE;
+-      goto out;
++      /* We can't just call __rtld_lock_lock_recursive (GL(dl_load_lock))
++	 here, that can result in ABBA deadlock.  */
++      THREAD_GSCOPE_RESET_FLAG ();
++      __rtld_lock_lock_recursive (GL(dl_load_lock));
++      THREAD_GSCOPE_SET_FLAG ();
++      /* While MAP value won't change, after THREAD_GSCOPE_RESET_FLAG ()
++	 it can e.g. point to unallocated memory.  So avoid the optimizer
++	 treating the above read from MAP->l_serial as ensurance it
++	 can safely dereference it.  */
++      map = atomic_forced_read (map);
+     }
++  else
++    __rtld_lock_lock_recursive (GL(dl_load_lock));
++
++  /* From this point on it is unsafe to dereference MAP, until it
++     has been found in one of the lists.  */
+ 
+   /* Determine whether UNDEF_MAP already has a reference to MAP.  First
+      look in the normal dependencies.  */
+@@ -125,7 +131,7 @@ add_dependency (struct link_map *undef_m
+ 
+       for (i = 0; list[i] != NULL; ++i)
+ 	if (list[i] == map)
+-	  goto out;
++	  goto out_check;
+     }
+ 
+   /* No normal dependency.  See whether we already had to add it
+@@ -135,7 +141,7 @@ add_dependency (struct link_map *undef_m
+ 
+   for (i = 0; i < act; ++i)
+     if (list[i] == map)
+-      goto out;
++      goto out_check;
+ 
+   /* The object is not yet in the dependency list.  Before we add
+      it make sure just one more time the object we are about to
+@@ -148,7 +154,29 @@ add_dependency (struct link_map *undef_m
+ 
+   if (runp != NULL)
+     {
+-      /* The object is still available.  Add the reference now.  */
++      /* The object is still available.  */
++
++      /* MAP could have been dlclosed, freed and then some other dlopened
++	 library could have the same link_map pointer.  */
++      if (map->l_serial != serial)
++	goto out_check;
++
++      /* Avoid references to objects which cannot be unloaded anyway.  */
++      assert (map->l_type == lt_loaded);
++      if ((map->l_flags_1 & DF_1_NODELETE) != 0)
++	goto out;
++
++      /* If the object with the undefined reference cannot be removed ever
++	 just make sure the same is true for the object which contains the
++	 definition.  */
++      if (undef_map->l_type != lt_loaded
++	  || (undef_map->l_flags_1 & DF_1_NODELETE) != 0)
++	{
++	  map->l_flags_1 |= DF_1_NODELETE;
++	  goto out;
++	}
++
++      /* Add the reference now.  */
+       if (__builtin_expect (act >= undef_map->l_reldepsmax, 0))
+ 	{
+ 	  /* Allocate more memory for the dependency list.  Since this
+@@ -169,13 +197,13 @@ add_dependency (struct link_map *undef_m
+ 	}
+ 
+       /* If we didn't manage to allocate memory for the list this is
+-	 no fatal mistake.  We simply increment the use counter of the
+-	 referenced object and don't record the dependencies.  This
+-	 means this increment can never be reverted and the object
+-	 will never be unloaded.  This is semantically the correct
++	 no fatal mistake.  We simply make sure the referenced object
++	 cannot be unloaded.  This is semantically the correct
+ 	 behavior.  */
+       if (__builtin_expect (act < undef_map->l_reldepsmax, 1))
+ 	undef_map->l_reldeps[undef_map->l_reldepsact++] = map;
++      else
++	map->l_flags_1 |= DF_1_NODELETE;
+ 
+       /* Display information if we are debugging.  */
+       if (__builtin_expect (GLRO(dl_debug_mask) & DL_DEBUG_FILES, 0))
+@@ -196,6 +224,11 @@ add_dependency (struct link_map *undef_m
+   __rtld_lock_unlock_recursive (GL(dl_load_lock));
+ 
+   return result;
++
++ out_check:
++  if (map->l_serial != serial)
++    result = -1;
++  goto out;
+ }
+ 
+ static void
+@@ -227,9 +260,11 @@ _dl_lookup_symbol_x (const char *undef_n
+ 
+   bump_num_relocations ();
+ 
+-  /* No other flag than DL_LOOKUP_ADD_DEPENDENCY is allowed if we look
+-     up a versioned symbol.  */
+-  assert (version == NULL || (flags & ~(DL_LOOKUP_ADD_DEPENDENCY)) == 0);
++  /* No other flag than DL_LOOKUP_ADD_DEPENDENCY or DL_LOOKUP_GSCOPE_LOCK
++     is allowed if we look up a versioned symbol.  */
++  assert (version == NULL
++	  || (flags & ~(DL_LOOKUP_ADD_DEPENDENCY | DL_LOOKUP_GSCOPE_LOCK))
++	     == 0);
+ 
+   size_t i = 0;
+   if (__builtin_expect (skip_map != NULL, 0))
+@@ -335,10 +370,12 @@ _dl_lookup_symbol_x (const char *undef_n
+ 	 runtime lookups.  */
+       && (flags & DL_LOOKUP_ADD_DEPENDENCY) != 0
+       /* Add UNDEF_MAP to the dependencies.  */
+-      && add_dependency (undef_map, current_value.m) < 0)
++      && add_dependency (undef_map, current_value.m, flags) < 0)
+       /* Something went wrong.  Perhaps the object we tried to reference
+ 	 was just removed.  Try finding another definition.  */
+-      return _dl_lookup_symbol_x (undef_name, undef_map, ref, symbol_scope,
++      return _dl_lookup_symbol_x (undef_name, undef_map, ref,
++				  (flags & DL_LOOKUP_GSCOPE_LOCK)
++				  ? undef_map->l_scope : symbol_scope,
+ 				  version, type_class, flags, skip_map);
+ 
+   /* The object is used.  */
+--- libc/elf/dl-object.c	20 Jun 2007 03:18:40 -0000	1.44
++++ libc/elf/dl-object.c	18 Sep 2007 19:20:28 -0000	1.45
+@@ -103,6 +103,7 @@ _dl_new_object (char *realname, const ch
+   else
+     GL(dl_ns)[nsid]._ns_loaded = new;
+   ++GL(dl_ns)[nsid]._ns_nloaded;
++  new->l_serial = GL(dl_load_adds);
+   ++GL(dl_load_adds);
+ 
+   /* If we have no loader the new object acts as it.  */
+--- libc/elf/dl-runtime.c	20 Jun 2007 03:16:38 -0000	1.77
++++ libc/elf/dl-runtime.c	18 Sep 2007 19:19:48 -0000	1.78
+@@ -100,7 +100,10 @@ _dl_fixup (
+ 	 we are not using any threads (yet).  */
+       int flags = DL_LOOKUP_ADD_DEPENDENCY;
+       if (!RTLD_SINGLE_THREAD_P)
+-	THREAD_GSCOPE_SET_FLAG ();
++	{
++	  THREAD_GSCOPE_SET_FLAG ();
++	  flags |= DL_LOOKUP_GSCOPE_LOCK;
++	}
+ 
+       result = _dl_lookup_symbol_x (strtab + sym->st_name, l, &sym, l->l_scope,
+ 				    version, ELF_RTYPE_CLASS_PLT, flags, NULL);
+@@ -192,7 +195,10 @@ _dl_profile_fixup (
+ 	     we are not using any threads (yet).  */
+ 	  int flags = DL_LOOKUP_ADD_DEPENDENCY;
+ 	  if (!RTLD_SINGLE_THREAD_P)
+-	    THREAD_GSCOPE_SET_FLAG ();
++	    {
++	      THREAD_GSCOPE_SET_FLAG ();
++	      flags |= DL_LOOKUP_GSCOPE_LOCK;
++	    }
+ 
+ 	  result = _dl_lookup_symbol_x (strtab + refsym->st_name, l,
+ 					&defsym, l->l_scope, version,
+--- libc/elf/dl-sym.c	20 Jun 2007 03:17:23 -0000	1.36
++++ libc/elf/dl-sym.c	18 Sep 2007 19:20:07 -0000	1.37
+@@ -123,7 +123,8 @@ do_sym (void *handle, const char *name, 
+ 	  args.name = name;
+ 	  args.map = match;
+ 	  args.vers = vers;
+-	  args.flags = flags | DL_LOOKUP_ADD_DEPENDENCY;
++	  args.flags
++	    = flags | DL_LOOKUP_ADD_DEPENDENCY | DL_LOOKUP_GSCOPE_LOCK;
+ 	  args.refp = &ref;
+ 
+ 	  THREAD_GSCOPE_SET_FLAG ();
+--- libc/sysdeps/generic/ldsodefs.h	20 Jun 2007 03:16:24 -0000	1.137
++++ libc/sysdeps/generic/ldsodefs.h	18 Sep 2007 19:19:30 -0000	1.138
+@@ -845,7 +845,9 @@ enum
+     DL_LOOKUP_ADD_DEPENDENCY = 1,
+     /* Return most recent version instead of default version for
+        unversioned lookup.  */
+-    DL_LOOKUP_RETURN_NEWEST = 2
++    DL_LOOKUP_RETURN_NEWEST = 2,
++    /* Set if dl_lookup* called with GSCOPE lock held.  */
++    DL_LOOKUP_GSCOPE_LOCK = 4,
+   };
+ 
+ /* Lookup versioned symbol.  */
+--- libc/include/link.h	20 Jun 2007 03:16:06 -0000	1.46
++++ libc/include/link.h	18 Sep 2007 19:20:19 -0000	1.47
+@@ -286,6 +286,8 @@ struct link_map
+     ElfW(Addr) l_relro_addr;
+     size_t l_relro_size;
+ 
++    unsigned long long int l_serial;
++
+     /* Audit information.  This array apparent must be the last in the
+        structure.  Never add something after it.  */
+     struct auditstate

@@ -1,0 +1,164 @@
+2007-05-25  Ulrich Drepper  <drepper@redhat.com>
+
+	* Makefile (tests): Add tst-sem10.
+	* tst-sem10.c: New file.
+
+2007-05-25  Ulrich Drepper  <drepper@redhat.com>
+	    Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/unix/sysv/linux/i386/i486/sem_timedwait.S (sem_timedwait):
+	Move __pthread_enable_asynccancel right before futex syscall.
+	* sysdeps/unix/sysv/linux/x86_64/sem_timedwait.S (sem_timedwait):
+	Likewise.
+
+--- libc/nptl/sysdeps/unix/sysv/linux/i386/i486/sem_timedwait.S	9 Apr 2006 02:42:29 -0000	1.8
++++ libc/nptl/sysdeps/unix/sysv/linux/i386/i486/sem_timedwait.S	25 May 2007 19:27:03 -0000	1.9
+@@ -79,10 +79,7 @@ sem_timedwait:
+ 	jae	6f
+ 
+ 	cfi_offset(3, -16)		/* %ebx */
+-7:	call	__pthread_enable_asynccancel
+-	movl	%eax, 8(%esp)
+-
+-	xorl	%ecx, %ecx
++7:	xorl	%ecx, %ecx
+ 	movl	%esp, %ebx
+ 	movl	%ecx, %edx
+ 	movl	$SYS_gettimeofday, %eax
+@@ -105,6 +102,10 @@ sem_timedwait:
+ 
+ 	movl	%ecx, (%esp)	/* Store relative timeout.  */
+ 	movl	%edx, 4(%esp)
++
++	call	__pthread_enable_asynccancel
++	movl	%eax, 8(%esp)
++
+ 	movl	28(%esp), %ebx
+ 	xorl	%ecx, %ecx
+ 	movl	%esp, %esi
+--- libc/nptl/sysdeps/unix/sysv/linux/x86_64/sem_timedwait.S	15 May 2007 06:24:23 -0000	1.11
++++ libc/nptl/sysdeps/unix/sysv/linux/x86_64/sem_timedwait.S	25 May 2007 19:27:03 -0000	1.12
+@@ -73,10 +73,7 @@ sem_timedwait:
+ 	cfi_offset(14, -24)		/* %r14 */
+ 	jae	6f
+ 
+-7:	call	__pthread_enable_asynccancel
+-	movl	%eax, 16(%rsp)
+-
+-	xorl	%esi, %esi
++7:	xorl	%esi, %esi
+ 	movq	%rsp, %rdi
+ 	movq	$VSYSCALL_ADDR_vgettimeofday, %rax
+ 	callq	*%rax
+@@ -99,6 +96,9 @@ sem_timedwait:
+ 	movq	%rdi, (%rsp)	/* Store relative timeout.  */
+ 	movq	%rsi, 8(%rsp)
+ 
++	call	__pthread_enable_asynccancel
++	movl	%eax, 16(%rsp)
++
+ 	movq	%rsp, %r10
+ 	movq	%r12, %rdi
+ 	xorl	%esi, %esi
+--- libc/nptl/Makefile	18 May 2007 00:52:02 -0000	1.189
++++ libc/nptl/Makefile	26 May 2007 01:30:09 -0000	1.190
+@@ -218,7 +218,7 @@ tests = tst-typesizes \
+ 	tst-once1 tst-once2 tst-once3 tst-once4 \
+ 	tst-key1 tst-key2 tst-key3 tst-key4 \
+ 	tst-sem1 tst-sem2 tst-sem3 tst-sem4 tst-sem5 tst-sem6 tst-sem7 \
+-	tst-sem8 tst-sem9 \
++	tst-sem8 tst-sem9 tst-sem10 \
+ 	tst-barrier1 tst-barrier2 tst-barrier3 tst-barrier4 \
+ 	tst-align tst-align2 tst-align3 \
+ 	tst-basic1 tst-basic2 tst-basic3 tst-basic4 tst-basic5 tst-basic6 \
+--- libc/nptl/tst-sem10.c	1 Jan 1970 00:00:00 -0000
++++ libc/nptl/tst-sem10.c	26 May 2007 01:23:04 -0000	1.1
+@@ -0,0 +1,88 @@
++/* Copyright (C) 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Jakub Jelinek <jakub@redhat.com>, 2007.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <errno.h>
++#include <pthread.h>
++#include <semaphore.h>
++#include <stdio.h>
++#include <time.h>
++#include <unistd.h>
++#include <sys/time.h>
++
++
++static int
++do_test (void)
++{
++  sem_t s;
++  if (sem_init (&s, 0, 0) == -1)
++    {
++      puts ("sem_init failed");
++      return 1;
++    }
++
++  struct timeval tv;
++  if (gettimeofday (&tv, NULL) != 0)
++    {
++      puts ("gettimeofday failed");
++      return 1;
++    }
++
++  struct timespec ts;
++  TIMEVAL_TO_TIMESPEC (&tv, &ts);
++
++  /* Set ts to yesterday.  */
++  ts.tv_sec -= 86400;
++
++  int type_before;
++  if (pthread_setcanceltype (PTHREAD_CANCEL_DEFERRED, &type_before) != 0)
++    {
++      puts ("first pthread_setcanceltype failed");
++      return 1;
++    }
++
++  errno = 0;
++  if (TEMP_FAILURE_RETRY (sem_timedwait (&s, &ts)) != -1)
++    {
++      puts ("sem_timedwait succeeded");
++      return 1;
++    }
++  if (errno != ETIMEDOUT)
++    {
++      printf ("sem_timedwait return errno = %d instead of ETIMEDOUT\n",
++	      errno);
++      return 1;
++    }
++
++  int type_after;
++  if (pthread_setcanceltype (PTHREAD_CANCEL_DEFERRED, &type_after) != 0)
++    {
++      puts ("second pthread_setcanceltype failed");
++      return 1;
++    }
++  if (type_after != PTHREAD_CANCEL_DEFERRED)
++    {
++      puts ("sem_timedwait changed cancellation type");
++      return 1;
++    }
++
++  return 0;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"

@@ -1,0 +1,224 @@
+2009-01-29  Ulrich Drepper  <drepper@redhat.com>
+
+	* allocatestack.c (__reclaim_stacks): Reset in_flight_stack later
+	for better debugging.  No need to use stack_list_add here.
+
+2009-01-08  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/pthread/list.h (list_add): Initialize new element first.
+	(list_add_tail): Removed.
+
+2009-01-07  Ulrich Drepper  <drepper@redhat.com>
+
+	* (in_flight_stack): New variable.
+	(stack_list_del): New function.  Use instead of list_del.
+	(stack_list_add): New function.  Use instead of list_add when adding to
+	stack_cache and stack_used lists.
+	(__reclaim_stacks): Complete operations on stack_cache and stack_used lists
+	when the fork call interrupted another thread.
+
+--- libc/nptl/allocatestack.c	15 Aug 2008 22:35:27 -0000	1.81
++++ libc/nptl/allocatestack.c	29 Jan 2009 20:34:16 -0000	1.84
+    This file is part of the GNU C Library.
+    Contributed by Ulrich Drepper <drepper@redhat.com>, 2002.
+ 
+@@ -112,6 +112,11 @@ static LIST_HEAD (stack_cache);
+ /* List of the stacks in use.  */
+ static LIST_HEAD (stack_used);
+ 
++/* We need to record what list operations we are going to do so that,
++   in case of an asynchronous interruption due to a fork() call, we
++   can correct for the work.  */
++static uintptr_t in_flight_stack;
++
+ /* List of the threads with user provided stacks in use.  No need to
+    initialize this, since it's done in __pthread_initialize_minimal.  */
+ list_t __stack_user __attribute__ ((nocommon));
+@@ -127,6 +132,36 @@ static unsigned int nptl_ncreated;
+ #define FREE_P(descr) ((descr)->tid <= 0)
+ 
+ 
++static void
++stack_list_del (list_t *elem)
++{
++  in_flight_stack = (uintptr_t) elem;
++
++  atomic_write_barrier ();
++
++  list_del (elem);
++
++  atomic_write_barrier ();
++
++  in_flight_stack = 0;
++}
++
++
++static void
++stack_list_add (list_t *elem, list_t *list)
++{
++  in_flight_stack = (uintptr_t) elem | 1;
++
++  atomic_write_barrier ();
++
++  list_add (elem, list);
++
++  atomic_write_barrier ();
++
++  in_flight_stack = 0;
++}
++
++
+ /* We create a double linked list of all cache entries.  Double linked
+    because this allows removing entries from the end.  */
+ 
+@@ -179,10 +214,10 @@ get_cached_stack (size_t *sizep, void **
+     }
+ 
+   /* Dequeue the entry.  */
+-  list_del (&result->list);
++  stack_list_del (&result->list);
+ 
+   /* And add to the list of stacks in use.  */
+-  list_add (&result->list, &stack_used);
++  stack_list_add (&result->list, &stack_used);
+ 
+   /* And decrease the cache size.  */
+   stack_cache_actsize -= result->stackblock_size;
+@@ -230,7 +265,7 @@ free_stacks (size_t limit)
+       if (FREE_P (curr))
+ 	{
+ 	  /* Unlink the block.  */
+-	  list_del (entry);
++	  stack_list_del (entry);
+ 
+ 	  /* Account for the freed memory.  */
+ 	  stack_cache_actsize -= curr->stackblock_size;
+@@ -260,7 +295,7 @@ queue_stack (struct pthread *stack)
+   /* We unconditionally add the stack to the list.  The memory may
+      still be in use but it will not be reused until the kernel marks
+      the stack as not used anymore.  */
+-  list_add (&stack->list, &stack_cache);
++  stack_list_add (&stack->list, &stack_cache);
+ 
+   stack_cache_actsize += stack->stackblock_size;
+   if (__builtin_expect (stack_cache_actsize > stack_cache_maxsize, 0))
+@@ -547,7 +574,7 @@ allocate_stack (const struct pthread_att
+ 	  lll_lock (stack_cache_lock, LLL_PRIVATE);
+ 
+ 	  /* And add to the list of stacks in use.  */
+-	  list_add (&pd->list, &stack_used);
++	  stack_list_add (&pd->list, &stack_used);
+ 
+ 	  lll_unlock (stack_cache_lock, LLL_PRIVATE);
+ 
+@@ -601,7 +628,7 @@ allocate_stack (const struct pthread_att
+ 	      lll_lock (stack_cache_lock, LLL_PRIVATE);
+ 
+ 	      /* Remove the thread from the list.  */
+-	      list_del (&pd->list);
++	      stack_list_del (&pd->list);
+ 
+ 	      lll_unlock (stack_cache_lock, LLL_PRIVATE);
+ 
+@@ -703,7 +730,7 @@ __deallocate_stack (struct pthread *pd)
+ 
+   /* Remove the thread from the list of threads with user defined
+      stacks.  */
+-  list_del (&pd->list);
++  stack_list_del (&pd->list);
+ 
+   /* Not much to do.  Just free the mmap()ed memory.  Note that we do
+      not reset the 'used' flag in the 'tid' field.  This is done by
+@@ -776,7 +803,45 @@ __reclaim_stacks (void)
+ {
+   struct pthread *self = (struct pthread *) THREAD_SELF;
+ 
+-  /* No locking necessary.  The caller is the only stack in use.  */
++  /* No locking necessary.  The caller is the only stack in use.  But
++     we have to be aware that we might have interrupted a list
++     operation.  */
++
++  if (in_flight_stack != 0)
++    {
++      bool add_p = in_flight_stack & 1;
++      list_t *elem = (list_t *) (in_flight_stack & ~UINTMAX_C (1));
++
++      if (add_p)
++	{
++	  /* We always add at the beginning of the list.  So in this
++	     case we only need to check the beginning of these lists.  */
++	  int check_list (list_t *l)
++	  {
++	    if (l->next->prev != l)
++	      {
++		assert (l->next->prev == elem);
++
++		elem->next = l->next;
++		elem->prev = l;
++		l->next = elem;
++
++		return 1;
++	      }
++
++	    return 0;
++	  }
++
++	  if (check_list (&stack_used) == 0)
++	    (void) check_list (&stack_cache);
++	}
++      else
++	{
++	  /* We can simply always replay the delete operation.  */
++	  elem->next->prev = elem->prev;
++	  elem->prev->next = elem->next;
++	}
++    }
+ 
+   /* Mark all stacks except the still running one as free.  */
+   list_t *runp;
+@@ -829,7 +894,7 @@ __reclaim_stacks (void)
+   /* Remove the entry for the current thread to from the cache list
+      and add it to the list of running threads.  Which of the two
+      lists is decided by the user_stack flag.  */
+-  list_del (&self->list);
++  stack_list_del (&self->list);
+ 
+   /* Re-initialize the lists for all the threads.  */
+   INIT_LIST_HEAD (&stack_used);
+@@ -843,6 +908,8 @@ __reclaim_stacks (void)
+   /* There is one thread running.  */
+   __nptl_nthreads = 1;
+ 
++  in_flight_stack = 0;
++
+   /* Initialize the lock.  */
+   stack_cache_lock = LLL_LOCK_INITIALIZER;
+ }
+--- libc/nptl/sysdeps/pthread/list.h	31 Dec 2002 20:05:17 -0000	1.2
++++ libc/nptl/sysdeps/pthread/list.h	8 Jan 2009 18:32:02 -0000	1.3
+@@ -46,24 +46,13 @@ typedef struct list_head
+ static inline void
+ list_add (list_t *newp, list_t *head)
+ {
+-  head->next->prev = newp;
+   newp->next = head->next;
+   newp->prev = head;
++  head->next->prev = newp;
+   head->next = newp;
+ }
+ 
+ 
+-/* Add new element at the tail of the list.  */
+-static inline void
+-list_add_tail (list_t *newp, list_t *head)
+-{
+-  head->prev->next = newp;
+-  newp->next = head;
+-  newp->prev = head->prev;
+-  head->prev = newp;
+-}
+-
+-
+ /* Remove element from list.  */
+ static inline void
+ list_del (list_t *elem)

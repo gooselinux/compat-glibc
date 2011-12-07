@@ -1,0 +1,32 @@
+2007-07-03  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #4702]
+	* nis/nss-default.c: Include errno.h.
+	(init): Preserve errno.
+
+--- libc/nis/nss-default.c	28 Apr 2006 21:03:17 -0000	1.3
++++ libc/nis/nss-default.c	3 Jul 2007 14:49:41 -0000	1.4
+@@ -17,6 +17,7 @@
+    02111-1307 USA.  */
+ 
+ #include <ctype.h>
++#include <errno.h>
+ #include <stdio.h>
+ #include <stdio_ext.h>
+ #include <stdlib.h>
+@@ -54,6 +55,7 @@ static const struct
+ static void
+ init (void)
+ {
++  int saved_errno = errno;
+   FILE *fp = fopen (default_nss, "rc");
+   if (fp != NULL)
+     {
+@@ -111,6 +113,7 @@ init (void)
+ 
+       fclose (fp);
+     }
++  __set_errno (saved_errno);
+ }
+ 
+ 

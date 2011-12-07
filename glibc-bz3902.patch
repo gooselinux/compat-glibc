@@ -1,0 +1,71 @@
+2007-01-22  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #3902]
+	* stdio-common/_itoa.c (_itoa): Make sure at least a zero is emitted.
+	* stdio-common/Makefile (tests): Add bug17.
+	* stdio-common/bug17.c: New file.
+
+--- libc/stdio-common/_itoa.c	6 Jun 2004 06:02:14 -0000	1.21
++++ libc/stdio-common/_itoa.c	22 Jan 2007 16:16:08 -0000	1.22
+@@ -269,6 +269,7 @@ _itoa (value, buflim, base, upper_case)
+ 
+     default:
+       {
++	char *bufend = buflim;
+ #if BITS_PER_MP_LIMB == 64
+ 	mp_limb_t base_multiplier = brec->base_multiplier;
+ 	if (brec->flag)
+@@ -454,6 +455,8 @@ _itoa (value, buflim, base, upper_case)
+ 	  }
+ 	while (n != 0);
+ #endif
++	if (buflim == bufend)
++	  *--buflim = '0';
+       }
+       break;
+     }
+--- libc/stdio-common/Makefile	3 Aug 2006 09:25:01 -0000	1.98
++++ libc/stdio-common/Makefile	22 Jan 2007 16:17:13 -0000	1.99
+@@ -54,7 +54,7 @@ tests := tstscanf test_rdwr test-popen t
+ 	 tst-swprintf tst-fseek tst-fmemopen test-vfprintf tst-gets \
+ 	 tst-perror tst-sprintf tst-rndseek tst-fdopen tst-fphex bug14 bug15 \
+ 	 tst-popen tst-unlockedio tst-fmemopen2 tst-put-error tst-fgets \
+-	 tst-fwrite bug16
++	 tst-fwrite bug16 bug17
+ 
+ test-srcs = tst-unbputc tst-printf
+ 
+--- libc/stdio-common/bug17.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdio-common/bug17.c	22 Jan 2007 16:17:04 -0000	1.1
+@@ -0,0 +1,31 @@
++#include <stdio.h>
++#include <string.h>
++
++static int
++do_test (void)
++{
++  static const char expect[] = "0, 0, 0";
++  char buf[100];
++  int status = 0;
++
++  static const char fmt1[] = "%0d, %0ld, %0lld";
++  snprintf (buf, sizeof (buf), fmt1, 0, 0L, 0LL);
++  if (strcmp (buf, expect) != 0)
++    {
++      printf ("\"%s\": got \"%s\", expected \"%s\"\n", fmt1, buf, expect);
++      status = 1;
++    }
++
++  static const char fmt2[] = "%0u, %0lu, %0llu";
++  snprintf (buf, sizeof (buf), fmt2, 0u, 0uL, 0uLL);
++  if (strcmp (buf, expect) != 0)
++    {
++      printf ("\"%s\": got \"%s\", expected \"%s\"\n", fmt2, buf, expect);
++      status = 1;
++    }
++
++  return status;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"

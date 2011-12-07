@@ -1,0 +1,28 @@
+2007-04-25  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #4406]
+	* iconv/gconv_charset.h (strip): Allow ':'
+	* iconv/iconv_open.c (iconv_open): Adjust comment.
+
+--- libc/iconv/gconv_charset.h	21 Dec 2005 07:27:27 -0000	1.9
++++ libc/iconv/gconv_charset.h	25 Apr 2007 15:14:36 -0000	1.10
+@@ -30,7 +30,7 @@ strip (char *wp, const char *s)
+   while (*s != '\0')
+     {
+       if (__isalnum_l (*s, _nl_C_locobj_ptr)
+-	  || *s == '_' || *s == '-' || *s == '.' || *s == ',')
++	  || *s == '_' || *s == '-' || *s == '.' || *s == ',' || *s == ':')
+ 	*wp++ = __toupper_l (*s, _nl_C_locobj_ptr);
+       else if (*s == '/')
+ 	{
+--- libc/iconv/iconv_open.c	29 Nov 2001 04:57:52 -0000	1.14
++++ libc/iconv/iconv_open.c	25 Apr 2007 15:15:21 -0000	1.15
+@@ -38,7 +38,7 @@ iconv_open (const char *tocode, const ch
+   int res;
+ 
+   /* Normalize the name.  We remove all characters beside alpha-numeric,
+-     '_', '-', '/', and '.'.  */
++     '_', '-', '/', '.', and ':'.  */
+   tocode_len = strlen (tocode);
+   tocode_conv = (char *) alloca (tocode_len + 3);
+   strip (tocode_conv, tocode);

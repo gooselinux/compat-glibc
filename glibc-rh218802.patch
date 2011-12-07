@@ -1,0 +1,82 @@
+2006-12-09  Jakub Jelinek  <jakub@redhat.com>
+
+	* misc/mntent_r.c (__hasmntopt): Check p[optlen] even when p == rest.
+	Start searching for next comma at p rather than rest.
+	* misc/Makefile (tests): Add tst-mntent2.
+	* misc/tst-mntent2.c: New test.
+
+--- libc/misc/Makefile	17 Jun 2006 17:00:58 -0000	1.119
++++ libc/misc/Makefile	9 Dec 2006 22:06:40 -0000	1.120
+@@ -78,7 +78,7 @@ endif
+ gpl2lgpl := error.c error.h
+ 
+ tests := tst-dirname tst-tsearch tst-fdset tst-efgcvt tst-mntent tst-hsearch \
+-	 tst-error1 tst-pselect tst-insremque
++	 tst-error1 tst-pselect tst-insremque tst-mntent2
+ ifeq (no,$(cross-compiling))
+ tests: $(objpfx)tst-error1-mem
+ endif
+--- libc/misc/mntent_r.c	17 Dec 2003 23:29:02 -0000	1.20
++++ libc/misc/mntent_r.c	9 Dec 2006 22:05:59 -0000	1.21
+@@ -278,14 +279,11 @@ __hasmntopt (const struct mntent *mnt, c
+ 
+   while ((p = strstr (rest, opt)) != NULL)
+     {
+-      if (p == rest
+-	  || (p[-1] == ','
+-	      && (p[optlen] == '\0' ||
+-		  p[optlen] == '='  ||
+-		  p[optlen] == ',')))
++      if ((p == rest || p[-1] == ',')
++	  && (p[optlen] == '\0' || p[optlen] == '=' || p[optlen] == ','))
+ 	return p;
+ 
+-      rest = strchr (rest, ',');
++      rest = strchr (p, ',');
+       if (rest == NULL)
+ 	break;
+       ++rest;
+--- libc/misc/tst-mntent2.c	1 Jan 1970 00:00:00 -0000
++++ libc/misc/tst-mntent2.c	9 Dec 2006 22:06:27 -0000	1.1
+@@ -0,0 +1,41 @@
++#include <mntent.h>
++#include <stdio.h>
++#include <string.h>
++
++
++int
++main (void)
++{
++  int result = 0;
++  struct mntent mef;
++
++  mef.mnt_fsname = strdupa ("/dev/sdf6");
++  mef.mnt_dir = strdupa ("/some dir");
++  mef.mnt_type = strdupa ("ext3");
++  mef.mnt_opts = strdupa ("opt1,opt2,noopt=6,rw,norw,brw");
++  mef.mnt_freq = 1;
++  mef.mnt_passno = 2;
++
++#define TEST(opt, found) \
++  if (!!hasmntopt (&mef, (opt)) != (found))				\
++    {									\
++      printf ("Option %s was %sfound\n", (opt), (found) ? "not " : "");	\
++      result = 1;							\
++    }
++
++  TEST ("opt1", 1)
++  TEST ("opt2", 1)
++  TEST ("noopt", 1)
++  TEST ("rw", 1)
++  TEST ("norw", 1)
++  TEST ("brw", 1)
++  TEST ("opt", 0)
++  TEST ("oopt", 0)
++  TEST ("w", 0)
++  TEST ("r", 0)
++  TEST ("br", 0)
++  TEST ("nor", 0)
++  TEST ("or", 0)
++
++  return result;
++}

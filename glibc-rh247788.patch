@@ -1,0 +1,118 @@
+2007-08-03  Jakub Jelinek  <jakub@redhat.com>
+
+	* intl/dcigettext.c (_nl_find_msg): Free encoding if __gconv_open
+	failed.
+	* intl/finddomain.c (_nl_find_domain): Free normalized_codeset
+	on failure.
+
+2007-07-19  Jakub Jelinek  <jakub@redhat.com>
+
+	* iconv/gconv_int.h (__GCONV_NULCONV): New internal only error code.
+	* iconv/gconv_cache.c (__gconv_lookup_cache): Return __GCONV_NULCONV
+	if from and to charsets are the same.
+	* iconv/gconv_db.c (__gconv_find_transform): Likewise.
+	* intl/dcigettext.c (_nl_find_msg): Return NULL even if __gconv_open
+	returns __GCONV_NOCONV, but not for __GCONV_NULCONV.
+
+2007-07-11  Jakub Jelinek  <jakub@redhat.com>
+
+	* intl/finddomain.c (_nl_find_domain): If _nl_explode_name
+	returned -1, return NULL.
+	* intl/explodename.c (_nl_explode_name): Return -1 if
+	_nl_normalize_codeset failed.
+
+--- libc/iconv/gconv_cache.c	11 Jan 2006 07:08:29 -0000	1.21
++++ libc/iconv/gconv_cache.c	28 Jul 2007 19:00:25 -0000	1.22
+@@ -285,7 +285,7 @@ __gconv_lookup_cache (const char *toset,
+ 
+   /* Avoid copy-only transformations if the user requests.   */
+   if (__builtin_expect (flags & GCONV_AVOID_NOCONV, 0) && fromidx == toidx)
+-    return __GCONV_NOCONV;
++    return __GCONV_NULCONV;
+ 
+   /* If there are special conversions available examine them first.  */
+   if (fromidx != 0 && toidx != 0
+--- libc/iconv/gconv_db.c	25 Apr 2006 17:45:02 -0000	1.53
++++ libc/iconv/gconv_db.c	28 Jul 2007 19:00:44 -0000	1.54
+@@ -756,7 +757,7 @@ __gconv_find_transform (const char *tose
+     {
+       /* Both character sets are the same.  */
+       __libc_lock_unlock (__gconv_lock);
+-      return __GCONV_NOCONV;
++      return __GCONV_NULCONV;
+     }
+ 
+   result = find_derivation (toset, toset_expand, fromset, fromset_expand,
+--- libc/iconv/gconv_int.h	15 May 2006 20:14:44 -0000	1.48
++++ libc/iconv/gconv_int.h	28 Jul 2007 19:00:09 -0000	1.49
+@@ -114,6 +114,12 @@ enum
+   GCONV_AVOID_NOCONV = 1 << 0
+ };
+ 
++/* When GCONV_AVOID_NOCONV is set and no conversion is needed,
++   __GCONV_NULCONV should be returned.  */
++enum
++{
++  __GCONV_NULCONV = -1
++};
+ 
+ /* Global variables.  */
+ 
+--- libc/intl/dcigettext.c	22 Jun 2006 23:58:37 -0000	1.53
++++ libc/intl/dcigettext.c	3 Aug 2007 15:49:59 -0000	1.55
+@@ -948,8 +948,11 @@ _nl_find_msg (domain_file, domainbinding
+ 			/* If the output encoding is the same there is
+ 			   nothing to do.  Otherwise do not use the
+ 			   translation at all.  */
+-			if (__builtin_expect (r != __GCONV_NOCONV, 1))
+-			  return NULL;
++			if (__builtin_expect (r != __GCONV_NULCONV, 1))
++			  {
++			    free ((char *) encoding);
++			    return NULL;
++			  }
+ 
+ 			convd->conv = (__gconv_t) -1;
+ 		      }
+--- libc/intl/finddomain.c	7 Apr 2006 03:27:32 -0000	1.35
++++ libc/intl/finddomain.c	3 Aug 2007 15:50:10 -0000	1.37
+@@ -126,6 +126,9 @@ _nl_find_domain (dirname, locale, domain
+      we use XPG4 style, and `_', `+', and `,' if we use CEN syntax.  */
+   mask = _nl_explode_name (locale, &language, &modifier, &territory,
+ 			   &codeset, &normalized_codeset);
++  if (mask == -1)
++    /* This means we are out of core.  */
++    return NULL;
+ 
+   /* We need to protect modifying the _NL_LOADED_DOMAINS data.  */
+   __libc_rwlock_wrlock (lock);
+@@ -140,7 +143,7 @@ _nl_find_domain (dirname, locale, domain
+ 
+   if (retval == NULL)
+     /* This means we are out of core.  */
+-    return NULL;
++    goto out;
+ 
+   if (retval->decided <= 0)
+     _nl_load_domain (retval, domainbinding);
+@@ -156,6 +159,7 @@ _nl_find_domain (dirname, locale, domain
+ 	}
+     }
+ 
++out:
+   /* The space for normalized_codeset is dynamically allocated.  Free it.  */
+   if (mask & XPG_NORM_CODESET)
+     free ((void *) normalized_codeset);
+--- libc/intl/explodename.c	7 Apr 2006 06:59:29 -0000	1.14
++++ libc/intl/explodename.c	12 Jul 2007 18:16:48 -0000	1.15
+@@ -108,7 +108,9 @@ _nl_explode_name (name, language, modifi
+ 	    {
+ 	      *normalized_codeset = _nl_normalize_codeset (*codeset,
+ 							   cp - *codeset);
+-	      if (strcmp (*codeset, *normalized_codeset) == 0)
++	      if (*normalized_codeset == NULL)
++		return -1;
++	      else if (strcmp (*codeset, *normalized_codeset) == 0)
+ 		free ((char *) *normalized_codeset);
+ 	      else
+ 		mask |= XPG_NORM_CODESET;

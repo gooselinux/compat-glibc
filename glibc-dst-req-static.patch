@@ -1,0 +1,58 @@
+2007-03-16  Jakub Jelinek  <jakub@redhat.com>
+
+	* elf/dl-open.c (dl_open_worker): Declare l in 2 different
+	smaller scopes.
+	* elf/dl-dst.h (DL_DST_REQ_STATIC): Add l as macro argument.
+	(DL_DST_REQUIRED): Adjust user.
+
+--- libc/elf/dl-dst.h	9 May 2006 21:44:31 -0000	1.13
++++ libc/elf/dl-dst.h	17 Mar 2007 17:08:00 -0000	1.14
+@@ -50,7 +51,7 @@
+ 									      \
+ 	   First get the origin string if it is not available yet.	      \
+ 	   This can only happen for the map of the executable.  */	      \
+-	DL_DST_REQ_STATIC						      \
++	DL_DST_REQ_STATIC (l)						      \
+ 	if ((l)->l_origin == NULL)					      \
+ 	  {								      \
+ 	    assert ((l)->l_name[0] == '\0');				      \
+@@ -68,9 +69,9 @@
+     __len; })
+ 
+ #ifdef SHARED
+-# define DL_DST_REQ_STATIC /* nothing */
++# define DL_DST_REQ_STATIC(l) /* nothing */
+ #else
+-# define DL_DST_REQ_STATIC \
++# define DL_DST_REQ_STATIC(l) \
+   if ((l) == NULL)							      \
+     {									      \
+       const char *origin = _dl_get_origin ();				      \
+--- libc/elf/dl-open.c	29 Oct 2006 21:45:26 -0000	1.136
++++ libc/elf/dl-open.c	17 Mar 2007 17:07:51 -0000	1.137
+@@ -160,7 +160,7 @@ dl_open_worker (void *a)
+   struct dl_open_args *args = a;
+   const char *file = args->file;
+   int mode = args->mode;
+-  struct link_map *new, *l;
++  struct link_map *new;
+   int lazy;
+   unsigned int i;
+ #ifdef USE_TLS
+@@ -187,6 +187,7 @@ dl_open_worker (void *a)
+ 	 By default we assume this is the main application.  */
+       call_map = GL(dl_ns)[LM_ID_BASE]._ns_loaded;
+ 
++      struct link_map *l;
+       for (Lmid_t ns = 0; ns < DL_NNS; ++ns)
+ 	for (l = GL(dl_ns)[ns]._ns_loaded; l != NULL; l = l->l_next)
+ 	  if (caller_dlopen >= (const void *) l->l_map_start
+@@ -326,7 +327,7 @@ dl_open_worker (void *a)
+   /* Relocate the objects loaded.  We do this in reverse order so that copy
+      relocs of earlier objects overwrite the data written by later objects.  */
+ 
+-  l = new;
++  struct link_map *l = new;
+   while (l->l_next)
+     l = l->l_next;
+   while (1)

@@ -1,0 +1,16 @@
+2006-10-09  Jakub Jelinek  <jakub@redhat.com>
+
+	* elf/dl-debug.c (_dl_debug_initialize): Check r->r_map for 0
+	rather than r->r_brk.
+
+--- libc/elf/dl-debug.c	1 Mar 2006 06:18:30 -0000	1.16
++++ libc/elf/dl-debug.c	9 Nov 2006 16:11:44 -0000	1.17
+@@ -54,7 +54,7 @@ _dl_debug_initialize (ElfW(Addr) ldbase,
+   else
+     r = &GL(dl_ns)[ns]._ns_debug;
+ 
+-  if (r->r_brk == 0 || ldbase != 0)
++  if (r->r_map == NULL || ldbase != 0)
+     {
+       /* Tell the debugger where to find the map of loaded objects.  */
+       r->r_version = 1	/* R_DEBUG_VERSION XXX */;

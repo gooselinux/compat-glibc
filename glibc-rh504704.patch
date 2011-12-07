@@ -1,0 +1,16 @@
+2009-06-09  Ulrich Drepper  <drepper@redhat.com>
+
+	* dlfcn/dlfcn.h: Remove comma at end of enum.
+	Patch by J.H.M. Dassen <rdassen@redhat.com>.
+
+--- libc/dlfcn/dlfcn.h
++++ libc/dlfcn/dlfcn.h
+@@ -164,7 +163,7 @@ enum
+        segment, or if the calling thread has not allocated a block for it.  */
+     RTLD_DI_TLS_DATA = 10,
+ 
+-    RTLD_DI_MAX = 10,
++    RTLD_DI_MAX = 10
+   };
+ 
+ 

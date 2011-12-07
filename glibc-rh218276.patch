@@ -1,0 +1,121 @@
+2006-12-04  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/unix/sysv/linux/ttyname.c: Include termios.h.
+	(ttyname): Use tcgetattr instead of isatty, don't set errno to ENOTTY.
+	* sysdeps/unix/sysv/linux/ttyname_r.c: Include termios.h.
+	(__ttyname_r): Use tcgetattr instead of isatty, don't set errno to
+	ENOTTY.
+	* io/Makefile: Add rules to build and run tst-ttyname_r test.
+	* io/tst-ttyname_r.c: New test.
+
+--- libc/sysdeps/unix/sysv/linux/ttyname.c	19 Apr 2006 07:26:48 -0000	1.20
++++ libc/sysdeps/unix/sysv/linux/ttyname.c	5 Dec 2006 21:25:29 -0000	1.21
+@@ -22,6 +22,7 @@
+ #include <dirent.h>
+ #include <sys/types.h>
+ #include <sys/stat.h>
++#include <termios.h>
+ #include <unistd.h>
+ #include <string.h>
+ #include <stdlib.h>
+@@ -118,12 +119,12 @@ ttyname (int fd)
+   int dostat = 0;
+   char *name;
+   int save = errno;
++  struct termios term;
+ 
+-  if (__builtin_expect (!__isatty (fd), 0))
+-    {
+-      __set_errno (ENOTTY);
+-      return NULL;
+-    }
++  /* isatty check, tcgetattr is used because it sets the correct
++     errno (EBADF resp. ENOTTY) on error.  */
++  if (__builtin_expect (__tcgetattr (fd, &term) < 0, 0))
++    return NULL;
+ 
+   /* We try using the /proc filesystem.  */
+   *_fitoa_word (fd, __stpcpy (procname, "/proc/self/fd/"), 10, 0) = '\0';
+--- libc/sysdeps/unix/sysv/linux/ttyname_r.c	19 Apr 2006 07:26:48 -0000	1.17
++++ libc/sysdeps/unix/sysv/linux/ttyname_r.c	5 Dec 2006 21:25:42 -0000	1.18
+@@ -22,6 +22,7 @@
+ #include <dirent.h>
+ #include <sys/types.h>
+ #include <sys/stat.h>
++#include <termios.h>
+ #include <unistd.h>
+ #include <string.h>
+ #include <stdlib.h>
+@@ -115,11 +116,11 @@ __ttyname_r (int fd, char *buf, size_t b
+       return ERANGE;
+     }
+ 
+-  if (__builtin_expect (!__isatty (fd), 0))
+-    {
+-      __set_errno (ENOTTY);
+-      return ENOTTY;
+-    }
++  /* isatty check, tcgetattr is used because it sets the correct
++     errno (EBADF resp. ENOTTY) on error.  */
++  struct termios term;
++  if (__builtin_expect (__tcgetattr (fd, &term) < 0, 0))
++    return errno;
+ 
+   /* We try using the /proc filesystem.  */
+   *_fitoa_word (fd, __stpcpy (procname, "/proc/self/fd/"), 10, 0) = '\0';
+--- libc/io/Makefile	28 Oct 2006 06:44:04 -0000	1.67
++++ libc/io/Makefile	5 Dec 2006 21:26:11 -0000	1.68
+@@ -66,7 +66,7 @@ tests		:= test-utime test-stat test-stat
+ 		   tst-openat tst-unlinkat tst-fstatat tst-futimesat \
+ 		   tst-renameat tst-fchownat tst-fchmodat tst-faccessat \
+ 		   tst-symlinkat tst-linkat tst-readlinkat tst-mkdirat \
+-		   tst-mknodat tst-mkfifoat
++		   tst-mknodat tst-mkfifoat tst-ttyname_r
+ 
+ distribute	:= ftwtest-sh
+ 
+--- libc/io/tst-ttyname_r.c	1 Jan 1970 00:00:00 -0000
++++ libc/io/tst-ttyname_r.c	5 Dec 2006 21:26:01 -0000	1.1
+@@ -0,0 +1,42 @@
++#include <errno.h>
++#include <error.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <unistd.h>
++
++static void do_prepare (void);
++#define PREPARE(argc, argv) do_prepare ()
++static int do_test (void);
++#define TEST_FUNCTION do_test ()
++#include <test-skeleton.c>
++
++static int temp_fd;
++
++static void
++do_prepare (void)
++{
++  char *temp_file;
++  temp_fd = create_temp_file ("tst-ttyname_r.", &temp_file);
++  if (temp_fd == -1)
++    error (1, errno, "cannot create temporary file");
++}
++
++static int
++do_test (void)
++{
++  int ret = 0;
++  char buf[sysconf (_SC_TTY_NAME_MAX) + 1];
++  int res = ttyname_r (-1, buf, sizeof (buf));
++  if (res != EBADF)
++    {
++      printf ("1st ttyname_r returned with res %d\n", res);
++      ret++;
++    }
++  res = ttyname_r (temp_fd, buf, sizeof (buf));
++  if (res != ENOTTY)
++    {
++      printf ("2nd ttyname_r returned with res %d\n", res);
++      ret++;
++    }
++  return ret;
++}

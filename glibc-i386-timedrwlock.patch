@@ -1,0 +1,97 @@
+2007-07-30  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/unix/sysv/linux/i386/i486/pthread_rwlock_timedrdlock.S
+	(pthread_rwlock_timedrdlock): Copy futex retval to %esi rather than
+	%ecx.
+	* sysdeps/unix/sysv/linux/i386/i486/pthread_rwlock_timedwrlock.S
+	(pthread_rwlock_timedwrlock): Likewise.
+	* sysdeps/unix/sysv/linux/i386/i486/pthread_rwlock_unlock.S
+	(__pthread_rwlock_unlock): Fix MUTEX != 0 args to __lll_*.
+
+--- libc/nptl/sysdeps/unix/sysv/linux/i386/i486/pthread_rwlock_timedrdlock.S	27 May 2007 19:19:42 -0000	1.12
++++ libc/nptl/sysdeps/unix/sysv/linux/i386/i486/pthread_rwlock_timedrdlock.S	1 Aug 2007 03:39:45 -0000	1.13
+@@ -124,7 +124,7 @@ pthread_rwlock_timedrdlock:
+ 	leal	READERS_WAKEUP(%ebp), %ebx
+ 	movl	$SYS_futex, %eax
+ 	ENTER_KERNEL
+-	movl	%eax, %ecx
++	movl	%eax, %esi
+ 17:
+ 
+ 	/* Reget the lock.  */
+@@ -139,7 +139,7 @@ pthread_rwlock_timedrdlock:
+ 	jnz	12f
+ 
+ 13:	subl	$1, READERS_QUEUED(%ebp)
+-	cmpl	$-ETIMEDOUT, %ecx
++	cmpl	$-ETIMEDOUT, %esi
+ 	jne	2b
+ 
+ 18:	movl	$ETIMEDOUT, %ecx
+@@ -217,7 +217,7 @@ pthread_rwlock_timedrdlock:
+ 	call	__lll_mutex_lock_wait
+ 	jmp	13b
+ 
+-16:	movl	$-ETIMEDOUT, %ecx
++16:	movl	$-ETIMEDOUT, %esi
+ 	jmp	17b
+ 
+ 19:	movl	$EINVAL, %ecx
+--- libc/nptl/sysdeps/unix/sysv/linux/i386/i486/pthread_rwlock_timedwrlock.S	27 May 2007 19:19:42 -0000	1.13
++++ libc/nptl/sysdeps/unix/sysv/linux/i386/i486/pthread_rwlock_timedwrlock.S	1 Aug 2007 03:39:45 -0000	1.14
+@@ -122,7 +122,7 @@ pthread_rwlock_timedwrlock:
+ 	leal	WRITERS_WAKEUP(%ebp), %ebx
+ 	movl	$SYS_futex, %eax
+ 	ENTER_KERNEL
+-	movl	%eax, %ecx
++	movl	%eax, %esi
+ 17:
+ 
+ 	/* Reget the lock.  */
+@@ -137,7 +137,7 @@ pthread_rwlock_timedwrlock:
+ 	jnz	12f
+ 
+ 13:	subl	$1, WRITERS_QUEUED(%ebp)
+-	cmpl	$-ETIMEDOUT, %ecx
++	cmpl	$-ETIMEDOUT, %esi
+ 	jne	2b
+ 
+ 18:	movl	$ETIMEDOUT, %ecx
+@@ -210,7 +210,7 @@ pthread_rwlock_timedwrlock:
+ 	call	__lll_mutex_lock_wait
+ 	jmp	13b
+ 
+-16:	movl	$-ETIMEDOUT, %ecx
++16:	movl	$-ETIMEDOUT, %esi
+ 	jmp	17b
+ 
+ 19:	movl	$EINVAL, %ecx
+--- libc/nptl/sysdeps/unix/sysv/linux/i386/i486/pthread_rwlock_unlock.S	27 May 2007 19:19:42 -0000	1.9
++++ libc/nptl/sysdeps/unix/sysv/linux/i386/i486/pthread_rwlock_unlock.S	1 Aug 2007 03:39:57 -0000	1.10
+@@ -117,7 +117,7 @@ __pthread_rwlock_unlock:
+ #if MUTEX == 0
+ 	movl	%edi, %ecx
+ #else
+-	leal	MUTEX(%edx), %ecx
++	leal	MUTEX(%edi), %ecx
+ #endif
+ 	call	__lll_mutex_lock_wait
+ 	jmp	2b
+@@ -126,7 +126,7 @@ __pthread_rwlock_unlock:
+ #if MUTEX == 0
+ 	movl	%edi, %eax
+ #else
+-	leal	MUTEX(%edx), %eax
++	leal	MUTEX(%edi), %eax
+ #endif
+ 	call	__lll_mutex_unlock_wake
+ 	jmp	4b
+@@ -135,7 +135,7 @@ __pthread_rwlock_unlock:
+ #if MUTEX == 0
+ 	movl	%edi, %eax
+ #else
+-	leal	MUTEX(%edx), %eax
++	leal	MUTEX(%edi), %eax
+ #endif
+ 	call	__lll_mutex_unlock_wake
+ 	jmp	8b

@@ -1,0 +1,15 @@
+2006-10-11  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/unix/sysv/linux/i386/sysdep.h (DOARGS_6): Fix offset.
+
+--- libc/sysdeps/unix/sysv/linux/i386/sysdep.h	1 Apr 2006 19:53:51 -0000	1.66
++++ libc/sysdeps/unix/sysv/linux/i386/sysdep.h	11 Oct 2006 20:15:14 -0000	1.67
+@@ -297,7 +297,7 @@
+ 			cfi_restore (edi); L(POPDI1):
+ 
+ #define PUSHARGS_6	_PUSHARGS_6
+-#define DOARGS_6	_DOARGS_6 (36)
++#define DOARGS_6	_DOARGS_6 (40)
+ #define POPARGS_6	_POPARGS_6
+ #define _PUSHARGS_6	pushl %ebp; cfi_adjust_cfa_offset (4); \
+ 			cfi_rel_offset (ebp, 0); L(PUSHBP1): _PUSHARGS_5

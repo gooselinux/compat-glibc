@@ -1,0 +1,27 @@
+2008-02-11  Joseph Myers  <joseph@codesourcery.com>
+
+	[BZ #3406]
+	* sysdeps/ieee754/flt-32/w_expf.c (o_threshold): Correct value.
+	* math/libm-test.inc (exp_test): Test 88.72269439697265625.
+
+--- libc/math/libm-test.inc	11 Apr 2008 19:32:30 -0000	1.79
++++ libc/math/libm-test.inc	22 May 2008 19:59:10 -0000	1.81
+@@ -2510,6 +2510,7 @@ exp_test (void)
+   TEST_f_f (exp, 3, M_E3l);
+   TEST_f_f (exp, 0.75L, 2.11700001661267466854536981983709561L);
+   TEST_f_f (exp, 50.0L, 5184705528587072464087.45332293348538L);
++  TEST_f_f (exp, 88.72269439697265625L, 3.40233126623160774937554134772290447915e38L);
+ #ifdef TEST_LDOUBLE
+   /* The result can only be represented in long double.  */
+   TEST_f_f (exp, 1000.0L, 0.197007111401704699388887935224332313e435L);
+--- libc/sysdeps/ieee754/flt-32/w_expf.c	14 Jul 1999 00:03:46 -0000	1.1
++++ libc/sysdeps/ieee754/flt-32/w_expf.c	11 May 2008 17:49:19 -0000	1.2
+@@ -29,7 +29,7 @@ static const float
+ #else
+ static float
+ #endif
+-o_threshold=  8.8721679688e+01,  /* 0x42b17180 */
++o_threshold=  8.8722831726e+01,  /* 0x42b17217 */
+ u_threshold= -1.0397208405e+02;  /* 0xc2cff1b5 */
+ 
+ #ifdef __STDC__

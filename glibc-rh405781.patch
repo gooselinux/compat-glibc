@@ -1,0 +1,21 @@
+2007-12-17  Ulrich Drepper  <drepper@redhat.com>
+
+	* malloc/malloc.c (public_cALLOc): For arena other than
+	main_arena, count all bytes inside the mprotect_size range of the
+	heap as uninitialized.
+
+--- libc/malloc/malloc.c	16 Dec 2007 22:52:58 -0000	1.183
++++ libc/malloc/malloc.c	17 Dec 2007 18:43:50 -0000	1.184
+@@ -3886,6 +3886,12 @@ public_cALLOc(size_t n, size_t elem_size
+       oldtopsize < mp_.sbrk_base + av->max_system_mem - (char *)oldtop)
+     oldtopsize = (mp_.sbrk_base + av->max_system_mem - (char *)oldtop);
+ #endif
++  if (av != &main_arena)
++    {
++      heap_info *heap = heap_for_ptr (oldtop);
++      if (oldtopsize < (char *) heap + heap->mprotect_size - (char *) oldtop)
++	oldtopsize = (char *) heap + heap->mprotect_size - (char *) oldtop;
++    }
+ #endif
+   mem = _int_malloc(av, sz);
+ 

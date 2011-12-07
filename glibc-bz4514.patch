@@ -1,0 +1,79 @@
+2007-05-21  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #4514]
+	* stdio-common/vfprintf.c (vfprintf): Don't shadow workstart variable,
+	reinitialize workend at the start of each do_positional format spec
+	loop, free workstart before do_positional loops.
+	(printf_unknown): Fix size of work_buffer.
+	* stdio-common/tst-sprintf.c (main): Add 3 new testcases.
+
+--- libc/stdio-common/vfprintf.c	7 May 2007 03:43:55 -0000	1.139
++++ libc/stdio-common/vfprintf.c	21 May 2007 17:50:22 -0000	1.140
+@@ -1627,6 +1627,8 @@ do_positional:
+     /* Just a counter.  */
+     size_t cnt;
+ 
++    free (workstart);
++    workstart = NULL;
+ 
+     if (grouping == (const char *) -1)
+       {
+@@ -1801,7 +1803,9 @@ do_positional:
+ 	int use_outdigits = specs[nspecs_done].info.i18n;
+ 	char pad = specs[nspecs_done].info.pad;
+ 	CHAR_T spec = specs[nspecs_done].info.spec;
+-	CHAR_T *workstart = NULL;
++
++	workstart = NULL;
++	workend = &work_buffer[sizeof (work_buffer) / sizeof (CHAR_T)];
+ 
+ 	/* Fill in last information.  */
+ 	if (specs[nspecs_done].width_arg != -1)
+@@ -1897,8 +1901,7 @@ do_positional:
+ 	    break;
+ 	  }
+ 
+-	if (__builtin_expect (workstart != NULL, 0))
+-	  free (workstart);
++	free (workstart);
+ 	workstart = NULL;
+ 
+ 	/* Write the following constant string.  */
+@@ -1926,7 +1929,7 @@ printf_unknown (FILE *s, const struct pr
+ 
+ {
+   int done = 0;
+-  CHAR_T work_buffer[MAX (info->width, info->spec) + 32];
++  CHAR_T work_buffer[MAX (sizeof (info->width), sizeof (info->prec)) * 3];
+   CHAR_T *const workend
+     = &work_buffer[sizeof (work_buffer) / sizeof (CHAR_T)];
+   register CHAR_T *w;
+--- libc/stdio-common/tst-sprintf.c	25 Jun 2003 11:04:49 -0000	1.3
++++ libc/stdio-common/tst-sprintf.c	21 May 2007 17:50:42 -0000	1.4
+@@ -37,5 +37,26 @@ main (void)
+       free (dst);
+     }
+ 
++  if (sprintf (buf, "%1$d%3$.*2$s%4$d", 7, 67108863, "x", 8) != 3
++      || strcmp (buf, "7x8") != 0)
++    {
++      printf ("sprintf (buf, \"%%1$d%%3$.*2$s%%4$d\", 7, 67108863, \"x\", 8) produced `%s' output", buf);
++      result = 1;
++    }
++
++  if (sprintf (buf, "%67108863.16\"%d", 7) != 14
++      || strcmp (buf, "%67108863.16\"7") != 0)
++    {
++      printf ("sprintf (buf, \"%%67108863.16\\\"%%d\", 7) produced `%s' output", buf);
++      result = 1;
++    }
++
++  if (sprintf (buf, "%*\"%d", 0x3ffffff, 7) != 11
++      || strcmp (buf, "%67108863\"7") != 0)
++    {
++      printf ("sprintf (buf, \"%%*\\\"%%d\", 0x3ffffff, 7) produced `%s' output", buf);
++      result = 1;
++    }
++
+   return result;
+ }

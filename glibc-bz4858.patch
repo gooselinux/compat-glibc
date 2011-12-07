@@ -1,0 +1,48 @@
+2007-07-31  Jakub Jelinek  <jakub@redhat.com>
+
+	* stdio-common/tfformat.c (sprint_doubles): Add 12 new tests.
+
+2007-07-28  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #4858]
+	* stdio-common/printf_fp.c (___printf_fp): Fix special case of
+	#.0g and value rounded to 1.0.
+	* stdio-common/tfformat.c (sprint_doubles): Add two new tests.
+
+--- libc/stdio-common/printf_fp.c	30 Apr 2007 22:31:21 -0000	1.63
++++ libc/stdio-common/printf_fp.c	29 Jul 2007 00:25:19 -0000	1.64
+@@ -986,7 +986,9 @@ ___printf_fp (FILE *fp,
+ 	    if (*wtp != decimalwc)
+ 	      /* Round up.  */
+ 	      (*wtp)++;
+-	    else if (__builtin_expect (spec == 'g' && type == 'f' && info->alt,
++	    else if (__builtin_expect (spec == 'g' && type == 'f' && info->alt
++				       && wtp == wstartp + 1
++				       && wstartp[0] == L'0',
+ 				       0))
+ 	      /* This is a special case: the rounded number is 1.0,
+ 		 the format is 'g' or 'G', and the alternative format
+--- libc/stdio-common/tfformat.c	30 Apr 2007 22:31:36 -0000	1.10
++++ libc/stdio-common/tfformat.c	31 Jul 2007 12:32:17 -0000	1.12
+@@ -4024,6 +4024,21 @@ sprint_double_type sprint_doubles[] =
+   {__LINE__, 1.0,			"1.000000e+00", "%e"},
+   {__LINE__, .9999999999999999,		"1.000000e+00", "%e"},
+ 
++  {__LINE__, 912.98,			"913.0", "%#.4g"},
++  {__LINE__, 50.999999,			"51.000", "%#.5g"},
++  {__LINE__, 0.956,			"1", "%.1g"},
++  {__LINE__, 0.956,			"1.", "%#.1g"},
++  {__LINE__, 0.996,			"1", "%.2g"},
++  {__LINE__, 0.996,			"1.0", "%#.2g"},
++  {__LINE__, 999.98,			"1000", "%.4g"},
++  {__LINE__, 999.98,			"1000.", "%#.4g"},
++  {__LINE__, 999.998,			"1000", "%.5g"},
++  {__LINE__, 999.998,			"1000.0", "%#.5g"},
++  {__LINE__, 999.9998,			"1000", "%g"},
++  {__LINE__, 999.9998,			"1000.00", "%#g"},
++  {__LINE__, 912.98,			"913", "%.4g"},
++  {__LINE__, 50.999999,			"51", "%.5g"},
++
+   {0 }
+ 
+ };

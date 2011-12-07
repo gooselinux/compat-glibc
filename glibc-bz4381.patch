@@ -1,0 +1,231 @@
+2007-04-23  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #4381]
+	* nss/nss_files/files-hosts.c (HOST_DB_LOOKUP): Ensure sufficient
+	alignment of buffer and tmp_buffer.
+	* nis/nss_nis/nis-hosts.c (internal_nis_gethostent_r,
+	internal_gethostbyname2_r, _nss_nis_gethostbyaddr_r): Ensure sufficient
+	alignment of buffer.
+	* resolv/nss_dns/dns-hosts.c (getanswer_r): Likewise.  Handle buflen
+	bigger than INT_MAX.
+	* resolv/nss_dns/dns-network.c (getanswer_r): Likewise.  Add errnop and
+	h_errnop arguments.  Fail if buflen is too small.
+	(_nss_dns_getnetbyname_r, _nss_dns_getnetbyaddr_r): Adjust callers.
+
+--- libc/nss/nss_files/files-hosts.c	20 Nov 2006 03:26:24 -0000	1.24
++++ libc/nss/nss_files/files-hosts.c	23 Apr 2007 15:15:53 -0000	1.25
+@@ -102,6 +103,10 @@ _nss_files_get##name##_r (proto,					   
+ {									      \
+   enum nss_status status;						      \
+ 									      \
++  uintptr_t pad = -(uintptr_t) buffer % __alignof__ (struct hostent_data);    \
++  buffer += pad;							      \
++  buflen = buflen > pad ? buflen - pad : 0;				      \
++									      \
+   __libc_lock_lock (lock);						      \
+ 									      \
+   /* Reset file pointer to beginning or open file.  */			      \
+@@ -122,7 +127,8 @@ _nss_files_get##name##_r (proto,					   
+ 	{								      \
+ 	  /* We have to get all host entries from the file.  */		      \
+ 	  const size_t tmp_buflen = MIN (buflen, 4096);			      \
+-	  char tmp_buffer[tmp_buflen];					      \
++	  char tmp_buffer[tmp_buflen]					      \
++	    __attribute__ ((__aligned__ (__alignof__ (struct hostent_data))));\
+ 	  struct hostent tmp_result_buf;				      \
+ 	  int naddrs = 1;						      \
+ 	  int naliases = 0;						      \
+--- libc/nis/nss_nis/nis-hosts.c	9 Apr 2006 02:08:28 -0000	1.26
++++ libc/nis/nss_nis/nis-hosts.c	23 Apr 2007 15:16:12 -0000	1.27
+@@ -134,13 +134,17 @@ internal_nis_gethostent_r (struct hosten
+   if (__builtin_expect (yp_get_default_domain (&domain), 0))
+     return NSS_STATUS_UNAVAIL;
+ 
++  uintptr_t pad = -(uintptr_t) buffer % __alignof__ (struct parser_data);
++  buffer += pad;
++
+   struct parser_data *data = (void *) buffer;
+-  if (__builtin_expect (buflen < sizeof *data + 1, 0))
++  if (__builtin_expect (buflen < sizeof *data + 1 + pad, 0))
+     {
+       *errnop = ERANGE;
+       *h_errnop = NETDB_INTERNAL;
+       return NSS_STATUS_TRYAGAIN;
+     }
++  buflen -= pad;
+ 
+   /* Get the next entry until we found a correct one. */
+   const size_t linebuflen = buffer + buflen - data->linebuffer;
+@@ -234,6 +238,9 @@ internal_gethostbyname2_r (const char *n
+ 			   char *buffer, size_t buflen, int *errnop,
+ 			   int *h_errnop, int flags)
+ {
++  uintptr_t pad = -(uintptr_t) buffer % __alignof__ (struct parser_data);
++  buffer += pad;
++
+   struct parser_data *data = (void *) buffer;
+ 
+   if (name == NULL)
+@@ -246,12 +253,13 @@ internal_gethostbyname2_r (const char *n
+   if (yp_get_default_domain (&domain))
+     return NSS_STATUS_UNAVAIL;
+ 
+-  if (buflen < sizeof *data + 1)
++  if (buflen < sizeof *data + 1 + pad)
+     {
+       *h_errnop = NETDB_INTERNAL;
+       *errnop = ERANGE;
+       return NSS_STATUS_TRYAGAIN;
+     }
++  buflen -= pad;
+ 
+   /* Convert name to lowercase.  */
+   size_t namlen = strlen (name);
+@@ -352,13 +360,17 @@ _nss_nis_gethostbyaddr_r (const void *ad
+   if (__builtin_expect (yp_get_default_domain (&domain), 0))
+     return NSS_STATUS_UNAVAIL;
+ 
++  uintptr_t pad = -(uintptr_t) buffer % __alignof__ (struct parser_data);
++  buffer += pad;
++
+   struct parser_data *data = (void *) buffer;
+-  if (__builtin_expect (buflen < sizeof *data + 1, 0))
++  if (__builtin_expect (buflen < sizeof *data + 1 + pad, 0))
+     {
+       *errnop = ERANGE;
+       *h_errnop = NETDB_INTERNAL;
+       return NSS_STATUS_TRYAGAIN;
+     }
++  buflen -= pad;
+ 
+   char *buf = inet_ntoa (*(const struct in_addr *) addr);
+ 
+--- libc/resolv/nss_dns/dns-host.c	24 Oct 2004 23:02:07 -0000	1.43
++++ libc/resolv/nss_dns/dns-host.c	23 Apr 2007 15:16:31 -0000	1.44
+@@ -465,8 +465,8 @@ getanswer_r (const querybuf *answer, int
+     char *aliases[MAX_NR_ALIASES];
+     unsigned char host_addr[16];	/* IPv4 or IPv6 */
+     char *h_addr_ptrs[0];
+-  } *host_data = (struct host_data *) buffer;
+-  int linebuflen = buflen - sizeof (struct host_data);
++  } *host_data;
++  int linebuflen;
+   register const HEADER *hp;
+   const u_char *end_of_message, *cp;
+   int n, ancount, qdcount;
+@@ -478,8 +478,9 @@ getanswer_r (const querybuf *answer, int
+   u_char packtmp[NS_MAXCDNAME];
+   int have_to_map = 0;
+   int32_t ttl = 0;
+-
+-  if (__builtin_expect (linebuflen, 0) < 0)
++  uintptr_t pad = -(uintptr_t) buffer % __alignof__ (struct host_data);
++  buffer += pad;
++  if (__builtin_expect (buflen < sizeof (struct host_data) + pad, 0))
+     {
+       /* The buffer is too small.  */
+     too_small:
+@@ -487,6 +488,10 @@ getanswer_r (const querybuf *answer, int
+       *h_errnop = NETDB_INTERNAL;
+       return NSS_STATUS_TRYAGAIN;
+     }
++  host_data = (struct host_data *) buffer;
++  linebuflen = buflen - sizeof (struct host_data);
++  if (buflen - sizeof (struct host_data) != linebuflen)
++    linebuflen = INT_MAX;
+ 
+   tname = qname;
+   result->h_name = NULL;
+--- libc/resolv/nss_dns/dns-network.c	17 Feb 2005 01:16:23 -0000	1.21
++++ libc/resolv/nss_dns/dns-network.c	23 Apr 2007 15:17:00 -0000	1.22
+@@ -102,7 +102,8 @@ extern int __ns_name_unpack (const u_cha
+ /* Prototypes for local functions.  */
+ static enum nss_status getanswer_r (const querybuf *answer, int anslen,
+ 				    struct netent *result, char *buffer,
+-				    size_t buflen, lookup_method net_i);
++				    size_t buflen, int *errnop, int *h_errnop,
++				    lookup_method net_i);
+ 
+ 
+ enum nss_status
+@@ -142,7 +143,8 @@ _nss_dns_getnetbyname_r (const char *nam
+ 	? NSS_STATUS_UNAVAIL : NSS_STATUS_NOTFOUND;
+     }
+ 
+-  status = getanswer_r (net_buffer.buf, anslen, result, buffer, buflen, BYNAME);
++  status = getanswer_r (net_buffer.buf, anslen, result, buffer, buflen,
++			errnop, herrnop, BYNAME);
+   if (net_buffer.buf != orig_net_buffer)
+     free (net_buffer.buf);
+   return status;
+@@ -218,7 +220,8 @@ _nss_dns_getnetbyaddr_r (uint32_t net, i
+ 	? NSS_STATUS_UNAVAIL : NSS_STATUS_NOTFOUND;
+     }
+ 
+-  status = getanswer_r (net_buffer.buf, anslen, result, buffer, buflen, BYADDR);
++  status = getanswer_r (net_buffer.buf, anslen, result, buffer, buflen,
++			errnop, herrnop, BYADDR);
+   if (net_buffer.buf != orig_net_buffer)
+     free (net_buffer.buf);
+   if (status == NSS_STATUS_SUCCESS)
+@@ -240,7 +243,8 @@ _nss_dns_getnetbyaddr_r (uint32_t net, i
+ 
+ static enum nss_status
+ getanswer_r (const querybuf *answer, int anslen, struct netent *result,
+-	     char *buffer, size_t buflen, lookup_method net_i)
++	     char *buffer, size_t buflen, int *errnop, int *h_errnop,
++	     lookup_method net_i)
+ {
+   /*
+    * Find first satisfactory answer
+@@ -260,8 +264,25 @@ getanswer_r (const querybuf *answer, int
+   {
+     char *aliases[MAX_NR_ALIASES];
+     char linebuffer[0];
+-  } *net_data = (struct net_data *) buffer;
++  } *net_data;
++
++  uintptr_t pad = -(uintptr_t) buffer % __alignof__ (struct net_data);
++  buffer += pad;
++
++  if (__builtin_expect (buflen < sizeof (*net_data) + pad, 0))
++    {
++      /* The buffer is too small.  */
++    too_small:
++      *errnop = ERANGE;
++      *h_errnop = NETDB_INTERNAL;
++      return NSS_STATUS_TRYAGAIN;
++    }
++  buflen -= pad;
++
++  net_data = (struct net_data *) buffer;
+   int linebuflen = buflen - offsetof (struct net_data, linebuffer);
++  if (buflen - offsetof (struct net_data, linebuffer) != linebuflen)
++    linebuflen = INT_MAX;
+   const unsigned char *end_of_message = &answer->buf[anslen];
+   const HEADER *header_pointer = &answer->hdr;
+   /* #/records in the answer section.  */
+@@ -319,10 +340,7 @@ getanswer_r (const querybuf *answer, int
+       if (n != -1 && __ns_name_ntop (packtmp, bp, linebuflen) == -1)
+ 	{
+ 	  if (errno == EMSGSIZE)
+-	    {
+-	      errno = ERANGE;
+-	      return NSS_STATUS_TRYAGAIN;
+-	    }
++	    goto too_small;
+ 
+ 	  n = -1;
+ 	}
+@@ -346,10 +364,7 @@ getanswer_r (const querybuf *answer, int
+ 	  if (n != -1 && __ns_name_ntop (packtmp, bp, linebuflen) == -1)
+ 	    {
+ 	      if (errno == EMSGSIZE)
+-		{
+-		  errno = ERANGE;
+-		  return NSS_STATUS_TRYAGAIN;
+-		}
++		goto too_small;
+ 
+ 	      n = -1;
+ 	    }

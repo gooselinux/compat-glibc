@@ -1,0 +1,16 @@
+2007-02-16  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #3995]
+	* locales/ru_RU (LC_TIME): Set first_weekday and first_workday.
+
+--- libc/localedata/locales/ru_RU	30 Jul 2006 22:19:43 -0000	1.29
++++ libc/localedata/locales/ru_RU	17 Feb 2007 07:26:33 -0000	1.30
+@@ -149,6 +149,8 @@ t_fmt_ampm ""
+ date_fmt       "<U0025><U0061><U0020><U0025><U0062><U0020><U0025><U0065>/
+ <U0020><U0025><U0048><U003A><U0025><U004D><U003A><U0025><U0053><U0020>/
+ <U0025><U005A><U0020><U0025><U0059>"
++first_weekday 2
++first_workday 2
+ END LC_TIME
+ 
+ LC_PAPER

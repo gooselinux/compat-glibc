@@ -1,0 +1,313 @@
+2007-01-03  Ulrich Drepper  <drepper@redhat.com>
+
+	* stdlib/Makefile (tst-strtod3-ENV): Define.
+
+2006-12-11  Ulrich Drepper  <drepper@redhat.com>
+
+	* stdlib/strtod_l.c (____STRTOF_INTERNAL): Parse thousand
+	separators also if no non-zero digits found.
+	* stdlib/Makefile (tests): Add tst-strtod3.
+
+2006-12-09  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #3664]
+	* stdlib/strtod_l.c (____STRTOF_INTERNAL): Fix test to recognize
+	empty parsed strings.
+	* stdlib/Makefile (tests): Add tst-strtod2.
+	* stdlib/tst-strtod2.c: New file.
+
+	[BZ #3673]
+	* stdlib/strtod_l.c (____STRTOF_INTERNAL): Fix exp_limit
+	computation.
+	* stdlib/Makefile (tests): Add tst-atof2.
+	* stdlib/tst-atof2.c: New file.
+
+	[BZ #3674]
+	* stdlib/strtod_l.c (____STRTOF_INTERNAL): Adjust exponent value
+	correctly if removing trailing zero of hex-float.
+	* stdlib/Makefile (tests): Add tst-atof1.
+	* stdlib/tst-atof1.c: New file.
+
+--- libc/stdlib/strtod_l.c	14 Jan 2006 12:09:09 -0000	1.14
++++ libc/stdlib/strtod_l.c	11 Dec 2006 21:43:48 -0000	1.19
+@@ -662,20 +662,20 @@ ____STRTOF_INTERNAL (nptr, endptr, group
+ 
+   /* If no other digit but a '0' is found the result is 0.0.
+      Return current read pointer.  */
+-  if ((c < L_('0') || c > L_('9'))
+-      && (base == 16 && (c < (CHAR_TYPE) TOLOWER (L_('a'))
+-			 || c > (CHAR_TYPE) TOLOWER (L_('f'))))
++  if (!((c >= L_('0') && c <= L_('9'))
++	|| (base == 16 && ((CHAR_TYPE) TOLOWER (c) >= L_('a')
++			   && (CHAR_TYPE) TOLOWER (c) <= L_('f')))
+ #ifdef USE_WIDE_CHAR
+-      && c != (wint_t) decimal
++	|| c == (wint_t) decimal
+ #else
+-      && ({ for (cnt = 0; decimal[cnt] != '\0'; ++cnt)
++	|| ({ for (cnt = 0; decimal[cnt] != '\0'; ++cnt)
+ 	      if (decimal[cnt] != cp[cnt])
+ 		break;
+-	    decimal[cnt] != '\0'; })
++	      decimal[cnt] == '\0'; })
+ #endif
+-      && (base == 16 && (cp == start_of_digits
+-			 || (CHAR_TYPE) TOLOWER (c) != L_('p')))
+-      && (base != 16 && (CHAR_TYPE) TOLOWER (c) != L_('e')))
++	|| (base == 16 && (cp != start_of_digits
++			   && (CHAR_TYPE) TOLOWER (c) == L_('p')))
++	|| (base != 16 && (CHAR_TYPE) TOLOWER (c) == L_('e'))))
+     {
+ #ifdef USE_WIDE_CHAR
+       tp = __correctly_grouped_prefixwc (start_of_digits, cp, thousands,
+@@ -721,7 +721,7 @@ ____STRTOF_INTERNAL (nptr, endptr, group
+       c = *++cp;
+     }
+ 
+-  if (grouping && dig_no > 0)
++  if (grouping && cp > start_of_digits)
+     {
+       /* Check the grouping of the digits.  */
+ #ifdef USE_WIDE_CHAR
+@@ -759,13 +759,15 @@ ____STRTOF_INTERNAL (nptr, endptr, group
+ 	}
+     }
+ 
+-  /* We have the number digits in the integer part.  Whether these are all or
+-     any is really a fractional digit will be decided later.  */
++  /* We have the number of digits in the integer part.  Whether these
++     are all or any is really a fractional digit will be decided
++     later.  */
+   int_no = dig_no;
+   lead_zero = int_no == 0 ? -1 : 0;
+ 
+-  /* Read the fractional digits.  A special case are the 'american style'
+-     numbers like `16.' i.e. with decimal but without trailing digits.  */
++  /* Read the fractional digits.  A special case are the 'american
++     style' numbers like `16.' i.e. with decimal point but without
++     trailing digits.  */
+   if (
+ #ifdef USE_WIDE_CHAR
+       c == (wint_t) decimal
+@@ -815,15 +817,16 @@ ____STRTOF_INTERNAL (nptr, endptr, group
+ 	  if (base == 16)
+ 	    exp_limit = (exp_negative ?
+ 			 -MIN_EXP + MANT_DIG + 4 * int_no :
+-			 MAX_EXP - 4 * int_no + lead_zero);
++			 MAX_EXP - 4 * int_no + 4 * lead_zero + 3);
+ 	  else
+ 	    exp_limit = (exp_negative ?
+ 			 -MIN_10_EXP + MANT_DIG + int_no :
+-			 MAX_10_EXP - int_no + lead_zero);
++			 MAX_10_EXP - int_no + lead_zero + 1);
+ 
+ 	  do
+ 	    {
+ 	      exponent *= 10;
++	      exponent += c - L_('0');
+ 
+ 	      if (exponent > exp_limit)
+ 		/* The exponent is too large/small to represent a valid
+@@ -853,7 +856,6 @@ ____STRTOF_INTERNAL (nptr, endptr, group
+ 		  /* NOTREACHED */
+ 		}
+ 
+-	      exponent += c - L_('0');
+ 	      c = *++cp;
+ 	    }
+ 	  while (c >= L_('0') && c <= L_('9'));
+@@ -888,7 +890,7 @@ ____STRTOF_INTERNAL (nptr, endptr, group
+ 	--expp;
+ 	--dig_no;
+ 	--int_no;
+-	++exponent;
++	exponent += base == 16 ? 4 : 1;
+       }
+     while (dig_no > 0 && exponent < 0);
+ 
+--- libc/stdlib/Makefile	28 Oct 2006 06:44:04 -0000	1.110
++++ libc/stdlib/Makefile	11 Dec 2006 21:43:10 -0000	1.113
+@@ -66,7 +66,8 @@ tests		:= tst-strtol tst-strtod testmb t
+ 		   test-canon test-canon2 tst-strtoll tst-environ	    \
+ 		   tst-xpg-basename tst-random tst-random2 tst-bsearch	    \
+ 		   tst-limits tst-rand48 bug-strtod tst-setcontext	    \
+-		   test-a64l tst-qsort tst-system testmb2 bug-strtod2
++		   test-a64l tst-qsort tst-system testmb2 bug-strtod2	    \
++		   tst-atof1 tst-atof2 tst-strtod2 tst-strtod3
+ 
+ include ../Makeconfig
+ 
+@@ -113,6 +113,7 @@ include ../Rules
+ test-canon-ARGS = --test-dir=${common-objpfx}stdlib
+ 
+ tst-strtod-ENV = LOCPATH=$(common-objpfx)localedata
++tst-strtod3-ENV = LOCPATH=$(common-objpfx)localedata
+ testmb2-ENV = LOCPATH=$(common-objpfx)localedata
+ 
+ # Run a test on the header files we use.
+--- libc/stdlib/tst-atof1.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdlib/tst-atof1.c	10 Dec 2006 09:54:35 -0000	1.1
+@@ -0,0 +1,19 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++static int
++do_test (void)
++{
++  char buf[100];
++  snprintf (buf, sizeof (buf), "%g", atof ("0x10p-1"));
++  if (strcmp (buf, "8") != 0)
++    {
++      printf ("got \"%s\", expected \"8\"\n", buf);
++      return 1;
++    }
++  return 0;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/stdlib/tst-atof2.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdlib/tst-atof2.c	10 Dec 2006 01:10:17 -0000	1.1
+@@ -0,0 +1,55 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++
++static const struct
++{
++  const char *str;
++  const char *expected;
++} tests[] =
++  {
++    { "1e308", "1e+308" },
++    { "100000000e300", "1e+308" },
++    { "0x1p1023", "8.98847e+307" },
++    { "0x1000p1011", "8.98847e+307" },
++    { "0x1p1020", "1.12356e+307" },
++    { "0x0.00001p1040", "1.12356e+307" },
++    { "1e-307", "1e-307" },
++    { "0.000001e-301", "1e-307" },
++    { "0.0000001e-300", "1e-307" },
++    { "0.00000001e-299", "1e-307" },
++    { "1000000e-313", "1e-307" },
++    { "10000000e-314", "1e-307" },
++    { "100000000e-315", "1e-307" },
++    { "0x1p-1021", "4.45015e-308" },
++    { "0x1000p-1033", "4.45015e-308" },
++    { "0x10000p-1037", "4.45015e-308" },
++    { "0x0.001p-1009", "4.45015e-308" },
++    { "0x0.0001p-1005", "4.45015e-308" },
++  };
++#define NTESTS (sizeof (tests) / sizeof (tests[0]))
++
++
++static int
++do_test (void)
++{
++  int status = 0;
++
++  for (int i = 0; i < NTESTS; ++i)
++    {
++      char buf[100];
++      snprintf (buf, sizeof (buf), "%g", atof (tests[i].str));
++      if (strcmp (buf, tests[i].expected) != 0)
++	{
++	  printf ("%d: got \"%s\", expected \"%s\"\n",
++		  i, buf, tests[i].expected);
++	  status = 1;
++	}
++    }
++
++  return status;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/stdlib/tst-strtod2.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdlib/tst-strtod2.c	11 Dec 2006 21:36:30 -0000	1.2
+@@ -0,0 +1,25 @@
++#include <stdio.h>
++#include <stdlib.h>
++
++static int
++do_test (void)
++{
++  int status = 0;
++  const char s[] = "0x";
++  char *ep;
++  double r = strtod (s, &ep);
++  if (r != 0)
++    {
++      printf ("r = %g, expect 0\n", r);
++      status = 1;
++    }
++  if (ep != s + 1)
++    {
++      printf ("strtod parsed %ju characters, expected 1\n", ep - s);
++      status = 1;
++    }
++  return status;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/stdlib/tst-strtod3.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdlib/tst-strtod3.c	11 Dec 2006 21:43:01 -0000	1.1
+@@ -0,0 +1,55 @@
++#include <locale.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++static const struct
++{
++  const char *in;
++  const char *out;
++  double expected;
++} tests[] =
++  {
++    { "000,,,e1", ",,,e1", 0.0 },
++    { "000e1", "", 0.0 },
++    { "000,1e1", ",1e1", 0.0 }
++  };
++#define NTESTS (sizeof (tests) / sizeof (tests[0]))
++
++
++static int
++do_test (void)
++{
++  if (setlocale (LC_ALL, "en_US.ISO-8859-1") == NULL)
++    {
++      puts ("could not set locale");
++      return 1;
++    }
++
++  int status = 0;
++
++  for (int i = 0; i < NTESTS; ++i)
++    {
++      char *ep;
++      double r = __strtod_internal (tests[i].in, &ep, 1);
++
++      if (strcmp (ep, tests[i].out) != 0)
++	{
++	  printf ("%d: got rest string \"%s\", expected \"%s\"\n",
++		  i, ep, tests[i].out);
++	  status = 1;
++	}
++
++      if (r != tests[i].expected)
++	{
++	  printf ("%d: got wrong results %g, expected %g\n",
++		  i, r, tests[i].expected);
++	  status = 1;
++	}
++    }
++
++  return status;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"

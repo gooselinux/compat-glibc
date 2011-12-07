@@ -1,0 +1,207 @@
+2007-04-13  Jakub Jelinek  <jakub@redhat.com>
+
+	* stdio-common/printf_fp.c (___printf_fp): Fix exponent -4
+	special case handling when wcp == wstartp + 1.  Fix a comment typo.
+	* stdio-common/tfformat.c (sprint_doubles): Add a new testcase.
+
+2007-02-21  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #4070]
+	* stdio-common/printf_fp.c (___printf_fp): Handle a few more
+	special cases.
+	* stdio-common/tfformat.c (sprint_doubles): Some more tests.
+
+2007-02-19  Ulrich Drepper  <drepper@redhat.com>
+
+	* stdio-common/printf_fp.c (___printf_fp): Cleanups and minor
+	optimization.
+
+--- libc/stdio-common/printf_fp.c	25 Apr 2006 18:38:30 -0000	1.58
++++ libc/stdio-common/printf_fp.c	16 Apr 2007 23:28:26 -0000	1.62
+@@ -811,12 +811,14 @@ ___printf_fp (FILE *fp,
+     int chars_needed;
+     int expscale;
+     int intdig_max, intdig_no = 0;
+-    int fracdig_min, fracdig_max, fracdig_no = 0;
++    int fracdig_min;
++    int fracdig_max;
+     int dig_max;
+     int significant;
+     int ngroups = 0;
++    char spec = _tolower (info->spec);
+ 
+-    if (_tolower (info->spec) == 'e')
++    if (spec == 'e')
+       {
+ 	type = info->spec;
+ 	intdig_max = 1;
+@@ -826,7 +828,7 @@ ___printf_fp (FILE *fp,
+ 	dig_max = INT_MAX;		/* Unlimited.  */
+ 	significant = 1;		/* Does not matter here.  */
+       }
+-    else if (_tolower (info->spec) == 'f')
++    else if (spec == 'f')
+       {
+ 	type = 'f';
+ 	fracdig_min = fracdig_max = info->prec < 0 ? 6 : info->prec;
+@@ -923,7 +925,9 @@ ___printf_fp (FILE *fp,
+       }
+ 
+     /* Generate the needed number of fractional digits.	 */
+-    while (fracdig_no < fracdig_min
++    int fracdig_no = 0;
++    int added_zeros = 0;
++    while (fracdig_no < fracdig_min + added_zeros
+ 	   || (fracdig_no < fracdig_max && (fracsize > 1 || frac[0] != 0)))
+       {
+ 	++fracdig_no;
+@@ -934,7 +938,7 @@ ___printf_fp (FILE *fp,
+ 	  {
+ 	    ++fracdig_max;
+ 	    if (fracdig_min > 0)
+-	      ++fracdig_min;
++	      ++added_zeros;
+ 	  }
+       }
+ 
+@@ -971,11 +975,23 @@ ___printf_fp (FILE *fp,
+ 	  {
+ 	    /* Process fractional digits.  Terminate if not rounded or
+ 	       radix character is reached.  */
++	    int removed = 0;
+ 	    while (*--wtp != decimalwc && *wtp == L'9')
+-	      *wtp = '0';
++	      {
++		*wtp = L'0';
++		++removed;
++	      }
++	    if (removed == fracdig_min && added_zeros > 0)
++	      --added_zeros;
+ 	    if (*wtp != decimalwc)
+ 	      /* Round up.  */
+ 	      (*wtp)++;
++	    else if (__builtin_expect (spec == 'g' && type == 'f' && info->alt,
++				       0))
++	      /* This is a special case: the rounded number is 1.0,
++		 the format is 'g' or 'G', and the alternative format
++		 is selected.  This means the result must be "1.".  */
++	      --added_zeros;
+ 	  }
+ 
+ 	if (fracdig_no == 0 || *wtp == decimalwc)
+@@ -1042,7 +1058,7 @@ ___printf_fp (FILE *fp,
+ 
+   do_expo:
+     /* Now remove unnecessary '0' at the end of the string.  */
+-    while (fracdig_no > fracdig_min && *(wcp - 1) == L'0')
++    while (fracdig_no > fracdig_min + added_zeros && *(wcp - 1) == L'0')
+       {
+ 	--wcp;
+ 	--fracdig_no;
+@@ -1060,26 +1076,46 @@ ___printf_fp (FILE *fp,
+     /* Write the exponent if it is needed.  */
+     if (type != 'f')
+       {
+-	*wcp++ = (wchar_t) type;
+-	*wcp++ = expsign ? L'-' : L'+';
+-
+-	/* Find the magnitude of the exponent.	*/
+-	expscale = 10;
+-	while (expscale <= exponent)
+-	  expscale *= 10;
+-
+-	if (exponent < 10)
+-	  /* Exponent always has at least two digits.  */
+-	  *wcp++ = L'0';
++	if (__builtin_expect (expsign != 0 && exponent == 4 && spec == 'g', 0))
++	  {
++	    /* This is another special case.  The exponent of the number is
++	       really smaller than -4, which requires the 'e'/'E' format.
++	       But after rounding the number has an exponent of -4.  */
++	    assert (wcp >= wstartp + 1);
++	    assert (wstartp[0] == L'1');
++	    __wmemcpy (wstartp, L"0.0001", 6);
++	    wstartp[1] = decimalwc;
++	    if (wcp >= wstartp + 2)
++	      {
++		wmemset (wstartp + 6, L'0', wcp - (wstartp + 2));
++		wcp += 4;
++	      }
++	    else
++	      wcp += 5;
++	  }
+ 	else
+-	  do
+-	    {
+-	      expscale /= 10;
+-	      *wcp++ = L'0' + (exponent / expscale);
+-	      exponent %= expscale;
+-	    }
+-	  while (expscale > 10);
+-	*wcp++ = L'0' + exponent;
++	  {
++	    *wcp++ = (wchar_t) type;
++	    *wcp++ = expsign ? L'-' : L'+';
++
++	    /* Find the magnitude of the exponent.	*/
++	    expscale = 10;
++	    while (expscale <= exponent)
++	      expscale *= 10;
++
++	    if (exponent < 10)
++	      /* Exponent always has at least two digits.  */
++	      *wcp++ = L'0';
++	    else
++	      do
++		{
++		  expscale /= 10;
++		  *wcp++ = L'0' + (exponent / expscale);
++		  exponent %= expscale;
++		}
++	      while (expscale > 10);
++	    *wcp++ = L'0' + exponent;
++	  }
+       }
+ 
+     /* Compute number of characters which must be filled with the padding
+--- libc/stdio-common/tfformat.c	11 Mar 2002 21:46:37 -0000	1.7
++++ libc/stdio-common/tfformat.c	16 Apr 2007 23:28:37 -0000	1.9
+@@ -4012,6 +4012,15 @@ sprint_double_type sprint_doubles[] =
+   {__LINE__, 16,			"0x1.0p+4", "%.1a"},
+   {__LINE__, 16,			"0x1.00000000000000000000p+4", "%.20a"},
+   {__LINE__, 4444.88888888,		"4445", "%2.F"},
++  {__LINE__, 0.956,			"1", "%.0g"},
++  {__LINE__, 1.0956,			"1.", "%#.0g"},
++  {__LINE__, 0.956,			"1.", "%#.0g"},
++  {__LINE__, 0.0956,			"0.1", "%#.0g"},
++  {__LINE__, 0.00956,			"0.01", "%#.0g"},
++  {__LINE__, 0.000956,			"0.001", "%#.0g"},
++  {__LINE__, 0.000098,			"0.0001", "%#.0g"},
++  {__LINE__, 0.0000996,			"0.00010", "%#.2g"},
++  {__LINE__, 9.999999999999999e-05,	"0.0001", "%g"},
+ 
+   {0 }
+ 
+@@ -4023,13 +4032,8 @@ sprint_double_type sprint_doubles[] =
+ 
+ int required_precision = 13;
+ 
+-#if defined(__STDC__) || defined(__cplusplus)
+ static int
+ matches (register char *result, register const char *desired)
+-#else
+-int matches(result, desired)
+-     register char *result; register const char *desired;
+-#endif
+ {
+     int digits_seen = 0;
+     for (;; result++, desired++) {
+@@ -4080,7 +4084,7 @@ int main(int argc, char *argv[])
+ 
+   /* And one special test.  */
+   {
+-    const char ref[] = "1.7763568394002504646778106689453125e-15";
++    static const char ref[] = "1.7763568394002504646778106689453125e-15";
+     int i;
+     d = 1.0;
+     for (i = 1; i < 50; ++i)

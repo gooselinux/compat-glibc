@@ -1,0 +1,17 @@
+2007-03-15  Jakub Jelinek  <jakub@redhat.com>
+
+	* locale/programs/ld-ctype.c (find_translit): Return NULL if ctype is
+	NULL.
+
+--- libc/locale/programs/ld-ctype.c	10 Nov 2006 20:15:53 -0000	1.113
++++ libc/locale/programs/ld-ctype.c	17 Mar 2007 16:52:21 -0000	1.114
+@@ -1866,6 +1866,9 @@ find_translit (struct localedef_t *local
+   assert (locale != NULL);
+   ctype = locale->categories[LC_CTYPE].ctype;
+ 
++  if (ctype == NULL)
++    return NULL;
++
+   if (ctype->translit != NULL)
+     result = find_translit2 (ctype, charmap, wch);
+ 

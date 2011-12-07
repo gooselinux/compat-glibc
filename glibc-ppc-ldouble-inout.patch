@@ -1,0 +1,283 @@
+2007-06-05  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/ieee754/ldbl-128ibm/mpn2ldbl.c
+	(__mpn_construct_long_double): Fix conversion where result ought
+	to be smaller than __LDBL_MIN__, or the low double should be
+	denormal.  Fix decision where to negate low double - honor round
+	to even rules.
+	* stdio-common/tst-sprintf2.c: Include string.h.
+	(COMPARE_LDBL): Define.
+	(TEST): Also test whether a string hexadecimal float representation
+	can be parsed back to the number.
+	(main): Add a couple of further tests.
+
+2007-06-04  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/ieee754/ldbl-128ibm/printf_fphex.c
+	(PRINT_FPHEX_LONG_DOUBLE): Fix printing numbers where lower double
+	is non-zero, but smaller than 2 * __DBL_MIN__.
+	* stdio-common/tst-sprintf2.c: New test.
+	* stdio-common/Makefile (tests): Add tst-sprintf2.
+
+--- libc/stdio-common/Makefile	18 Feb 2007 08:25:39 -0000	1.100
++++ libc/stdio-common/Makefile	4 Jun 2007 14:38:03 -0000	1.101
+@@ -54,7 +54,7 @@ tests := tstscanf test_rdwr test-popen t
+ 	 tst-swprintf tst-fseek tst-fmemopen test-vfprintf tst-gets \
+ 	 tst-perror tst-sprintf tst-rndseek tst-fdopen tst-fphex bug14 bug15 \
+ 	 tst-popen tst-unlockedio tst-fmemopen2 tst-put-error tst-fgets \
+-	 tst-fwrite bug16 bug17
++	 tst-fwrite bug16 bug17 tst-sprintf2
+ 
+ test-srcs = tst-unbputc tst-printf
+ 
+--- libc/stdio-common/tst-sprintf2.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdio-common/tst-sprintf2.c	8 Jun 2007 03:06:43 -0000	1.2
+@@ -0,0 +1,82 @@
++#include <float.h>
++#include <math.h>
++#include <stdio.h>
++#include <string.h>
++
++int
++main (void)
++{
++  volatile union { long double l; long long x[2]; } u, v;
++  char buf[64];
++  int result = 0;
++
++#if LDBL_MANT_DIG == 106 || LDBL_MANT_DIG == 113
++# define COMPARE_LDBL(u, v) \
++  ((u).l == (v).l && (u).x[0] == (v).x[0] && (u).x[1] == (v).x[1])
++#else
++# define COMPARE_LDBL(u, v) ((u).l == (v).l)
++#endif
++
++#define TEST(val) \
++  do									   \
++    {									   \
++      u.l = (val);							   \
++      snprintf (buf, sizeof buf, "%LaL", u.l);				   \
++      if (strcmp (buf, #val) != 0)					   \
++	{								   \
++	  printf ("Error on line %d: %s != %s\n", __LINE__, buf, #val);	   \
++	  result = 1;							   \
++	}								   \
++      if (sscanf (#val, "%La", &v.l) != 1 || !COMPARE_LDBL (u, v))	   \
++	{								   \
++	  printf ("Error sscanf on line %d: %La != %La\n", __LINE__,	   \
++		  u.l, v.l);						   \
++	  result = 1;							   \
++	}								   \
++      /* printf ("%s %La %016Lx %016Lx\n", #val, u.l, u.x[0], u.x[1]); */  \
++    }									   \
++  while (0)
++
++#if LDBL_MANT_DIG >= 106
++# if LDBL_MANT_DIG == 106
++  TEST (0x0.ffffffffffffp-1022L);
++  TEST (0x0.ffffffffffff1p-1022L);
++  TEST (0x0.fffffffffffffp-1022L);
++# endif
++  TEST (0x1p-1022L);
++  TEST (0x1.0000000000001p-1022L);
++  TEST (0x1.00000000001e7p-1022L);
++  TEST (0x1.fffffffffffffp-1022L);
++  TEST (0x1p-1021L);
++  TEST (0x1.00000000000008p-1021L);
++  TEST (0x1.0000000000001p-1021L);
++  TEST (0x1.00000000000018p-1021L);
++  TEST (0x1.0000000000000f8p-1017L);
++  TEST (0x1.0000000000001p-1017L);
++  TEST (0x1.000000000000108p-1017L);
++  TEST (0x1.000000000000dcf8p-1013L);
++  TEST (0x1.000000000000ddp-1013L);
++  TEST (0x1.000000000000dd08p-1013L);
++  TEST (0x1.ffffffffffffffffffffffffffp-1L);
++  TEST (0x1.ffffffffffffffffffffffffff8p-1L);
++  TEST (0x1p+0L);
++  TEST (0x1.000000000000000000000000008p+0L);
++  TEST (0x1.00000000000000000000000001p+0L);
++  TEST (0x1.000000000000000000000000018p+0L);
++  TEST (0x1.23456789abcdef123456789abc8p+0L);
++  TEST (0x1.23456789abcde7123456789abc8p+0L);
++  TEST (0x1.23456789abcdef123456789abc8p+64L);
++  TEST (0x1.23456789abcde7123456789abc8p+64L);
++  TEST (0x1.123456789abcdef123456789p-969L);
++# if LDBL_MANT_DIG == 106
++  TEST (-0x1.2d71957cc1263bbbeb1d365f1e8p-969L);
++  TEST (0x1.23456789abcdef0123456789abp-970L);
++  TEST (0x1.579bde02468acp-1001L);
++  TEST (0x0.abcdef0123456p-1022L);
++  TEST (0x1.abcdef0123456p-1022L);
++  TEST (0x1.abcdef012345678p-1014L);
++  TEST (0x1.abcdef0123456f8p-1014L);
++# endif
++#endif
++  return result;
++}
+--- libc/sysdeps/ieee754/ldbl-128ibm/mpn2ldbl.c	28 Jan 2006 00:07:25 -0000	1.1
++++ libc/sysdeps/ieee754/ldbl-128ibm/mpn2ldbl.c	8 Jun 2007 03:06:31 -0000	1.2
+@@ -31,19 +31,20 @@ long double
+ __mpn_construct_long_double (mp_srcptr frac_ptr, int expt, int sign)
+ {
+   union ibm_extended_long_double u;
+-  unsigned long hidden2, lzcount;
++  unsigned long lzcount;
+   unsigned long long hi, lo;
++  int exponent2;
+ 
+   u.ieee.negative = sign;
+   u.ieee.negative2 = sign;
+   u.ieee.exponent = expt + IBM_EXTENDED_LONG_DOUBLE_BIAS;
+-  u.ieee.exponent2 = expt - 53 + IBM_EXTENDED_LONG_DOUBLE_BIAS;
++  u.ieee.exponent2 = 0;
++  exponent2 = expt - 53 + IBM_EXTENDED_LONG_DOUBLE_BIAS;
+ 
+ #if BITS_PER_MP_LIMB == 32
+   /* The low order 53 bits (52 + hidden) go into the lower double */
+   lo = frac_ptr[0];
+   lo |= (frac_ptr[1] & ((1LL << (53 - 32)) - 1)) << 32;
+-  hidden2 = (frac_ptr[1] >> (52 - 32)) & ((mp_limb_t) 1);
+   /* The high order 53 bits (52 + hidden) go into the upper double */
+   hi = (frac_ptr[1] >> (53 - 32)) & ((1 << 11) - 1);
+   hi |= ((unsigned long long) frac_ptr[2]) << 11;
+@@ -51,7 +52,6 @@ __mpn_construct_long_double (mp_srcptr f
+ #elif BITS_PER_MP_LIMB == 64
+   /* The low order 53 bits (52 + hidden) go into the lower double */
+   lo = frac_ptr[0] & (((mp_limb_t) 1 << 53) - 1);
+-  hidden2 = (frac_ptr[0] >> 52) & ((mp_limb_t) 1);
+   /* The high order 53 bits (52 + hidden) go into the upper double */
+   hi = (frac_ptr[0] >> 53) & (((mp_limb_t) 1 << 11) - 1);
+   hi |= (frac_ptr[1] << 11);
+@@ -59,14 +59,62 @@ __mpn_construct_long_double (mp_srcptr f
+   #error "mp_limb size " BITS_PER_MP_LIMB "not accounted for"
+ #endif
+ 
++  if ((hi & (1LL << 52)) == 0 && (hi | lo) != 0)
++    {
++      /* denormal number  */
++      unsigned long long val = hi ? hi : lo;
++
++      if (sizeof (val) == sizeof (long))
++	lzcount = __builtin_clzl (val);
++      else if ((val >> 32) != 0)
++	lzcount = __builtin_clzl ((long) (val >> 32));
++      else
++	lzcount = __builtin_clzl ((long) val) + 32;
++      if (hi)
++	lzcount = lzcount - 11;
++      else
++	lzcount = lzcount + 42;
++
++      if (lzcount > u.ieee.exponent)
++	{
++	  lzcount = u.ieee.exponent;
++	  u.ieee.exponent = 0;
++	  exponent2 -= lzcount;
++	}
++      else
++	{
++	  u.ieee.exponent -= (lzcount - 1);
++	  exponent2 -= (lzcount - 1);
++	}
++
++      if (lzcount <= 53)
++	{
++	  hi = (hi << lzcount) | (lo >> (53 - lzcount));
++	  lo = (lo << lzcount) & ((1LL << 53) - 1);
++	}
++      else
++	{
++	  hi = lo << (lzcount - 53);
++	  lo = 0;
++	}
++    }
++
+   if (lo != 0L)
+     {
+       /* hidden2 bit of low double controls rounding of the high double.
+-	 If hidden2 is '1' then round up hi and adjust lo (2nd mantissa)
++	 If hidden2 is '1' and either the explicit mantissa is non-zero
++	 or hi is odd, then round up hi and adjust lo (2nd mantissa)
+ 	 plus change the sign of the low double to compensate.  */
+-      if (hidden2)
++      if ((lo & (1LL << 52)) != 0
++	  && ((hi & 1) != 0 || (lo & ((1LL << 52) - 1))))
+ 	{
+ 	  hi++;
++	  if ((hi & ((1LL << 52) - 1)) == 0)
++	    {
++	      if ((hi & (1LL << 53)) != 0)
++		hi -= 1LL << 52;
++	      u.ieee.exponent++;
++	    }
+ 	  u.ieee.negative2 = !sign;
+ 	  lo = (1LL << 53) - lo;
+ 	}
+@@ -85,17 +133,18 @@ __mpn_construct_long_double (mp_srcptr f
+       if (lzcount > 0)
+ 	{
+ 	  lo = lo << lzcount;
+-	  u.ieee.exponent2 = u.ieee.exponent2 - lzcount;
++	  exponent2 = exponent2 - lzcount;
+ 	}
++      if (exponent2 > 0)
++	u.ieee.exponent2 = exponent2;
++      else
++	lo >>= 1 - exponent2;
+     }
+   else
+-    {
+-      u.ieee.negative2 = 0;
+-      u.ieee.exponent2 = 0;
+-    }
++    u.ieee.negative2 = 0;
+ 
+   u.ieee.mantissa3 = lo & 0xffffffffLL;
+-  u.ieee.mantissa2 = (lo >> 32) & 0xffffff;
++  u.ieee.mantissa2 = (lo >> 32) & 0xfffff;
+   u.ieee.mantissa1 = hi & 0xffffffffLL;
+   u.ieee.mantissa0 = (hi >> 32) & ((1LL << (LDBL_MANT_DIG - 86)) - 1);
+ 
+--- libc/sysdeps/ieee754/ldbl-128ibm/printf_fphex.c	28 Jan 2006 00:07:25 -0000	1.1
++++ libc/sysdeps/ieee754/ldbl-128ibm/printf_fphex.c	4 Jun 2007 14:37:23 -0000	1.2
+@@ -35,21 +35,24 @@ do {									      \
+ 									      \
+       lo = ((long long)eldbl.ieee.mantissa2 << 32) | eldbl.ieee.mantissa3;    \
+       hi = ((long long)eldbl.ieee.mantissa0 << 32) | eldbl.ieee.mantissa1;    \
+-   /* If the lower double is not a denomal or zero then set the hidden	      \
+-      53rd bit.  */							      \
+-      if (eldbl.ieee.exponent2 > 0x001)					      \
+-	{								      \
+-	  lo |= (1ULL << 52);						      \
+-	  lo = lo << 7; /* pre-shift lo to match ieee854.  */		      \
+-	  /* The lower double is normalized separately from the upper.  We    \
+-	     may need to adjust the lower manitissa to reflect this.  */      \
+-	  ediff = eldbl.ieee.exponent - eldbl.ieee.exponent2;		      \
+-	  if (ediff > 53)						      \
+-	    lo = lo >> (ediff-53);					      \
+-	}								      \
+-  									      \
+-      if ((eldbl.ieee.negative != eldbl.ieee.negative2)			      \
+-	  && ((eldbl.ieee.exponent2 != 0) && (lo != 0L)))		      \
++      lo <<= 7; /* pre-shift lo to match ieee854.  */			      \
++      /* If the lower double is not a denomal or zero then set the hidden     \
++	 53rd bit.  */							      \
++      if (eldbl.ieee.exponent2 != 0)					      \
++	lo |= (1ULL << (52 + 7));					      \
++      else								      \
++	lo <<= 1;							      \
++      /* The lower double is normalized separately from the upper.  We	      \
++	 may need to adjust the lower manitissa to reflect this.  */	      \
++      ediff = eldbl.ieee.exponent - eldbl.ieee.exponent2;		      \
++      if (ediff > 53 + 63)						      \
++	lo = 0;								      \
++      else if (ediff > 53)						      \
++	lo = lo >> (ediff - 53);					      \
++      else if (eldbl.ieee.exponent2 == 0 && ediff < 53)			      \
++	lo = lo << (53 - ediff);					      \
++      if (eldbl.ieee.negative != eldbl.ieee.negative2			      \
++	  && (eldbl.ieee.exponent2 != 0 || lo != 0L))			      \
+ 	{								      \
+ 	  lo = (1ULL << 60) - lo;					      \
+ 	  if (hi == 0L)							      \

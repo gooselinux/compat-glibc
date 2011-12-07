@@ -1,0 +1,210 @@
+2007-03-01  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #4069]
+	* sysdeps/ieee754/dbl-64/e_pow.c (__ieee754_pow): Check for NaN
+	earlier.
+	* math/libm-test.inc (pow_test): Add more tests involving NaNs.
+
+	* sysdeps/i386/fpu/e_powf.S (__ieee754_powf): Avoid invalid exception
+	for x qNaN and y either +-inf or non-integer value.
+	* sysdeps/i386/fpu/e_pow.S (__ieee754_pow): Likewise.
+	* sysdeps/i386/fpu/e_powl.S (__ieee754_powl): Likewise.
+	* sysdeps/x86_64/fpu/e_powl.S (__ieee754_powl): Likewise.
+
+--- libc/sysdeps/i386/fpu/e_pow.S	4 May 2005 17:45:15 -0000	1.7
++++ libc/sysdeps/i386/fpu/e_pow.S	5 Mar 2007 19:38:51 -0000	1.8
+@@ -161,10 +161,11 @@ ENTRY(__ieee754_pow)
+ 2:	/* y is a real number.  */
+ 	fxch			// x : y
+ 	fldl	MO(one)		// 1.0 : x : y
+-	fld	%st(1)		// x : 1.0 : x : y
+-	fsub	%st(1)		// x-1 : 1.0 : x : y
+-	fabs			// |x-1| : 1.0 : x : y
+-	fcompl	MO(limit)	// 1.0 : x : y
++	fldl	MO(limit)	// 0.29 : 1.0 : x : y
++	fld	%st(2)		// x : 0.29 : 1.0 : x : y
++	fsub	%st(2)		// x-1 : 0.29 : 1.0 : x : y
++	fabs			// |x-1| : 0.29 : 1.0 : x : y
++	fucompp			// 1.0 : x : y
+ 	fnstsw
+ 	fxch			// x : 1.0 : y
+ 	sahf
+@@ -197,9 +198,10 @@ ENTRY(__ieee754_pow)
+ 	// y == 켲nf
+ 	.align ALIGNARG(4)
+ 12:	fstp	%st(0)		// pop y
+-	fldl	4(%esp)		// x
+-	fabs
+-	fcompl	MO(one)		// < 1, == 1, or > 1
++	fldl	MO(one)		// 1
++	fldl	4(%esp)		// x : 1
++	fabs			// abs(x) : 1
++	fucompp			// < 1, == 1, or > 1
+ 	fnstsw
+ 	andb	$0x45, %ah
+ 	cmpb	$0x45, %ah
+--- libc/sysdeps/i386/fpu/e_powf.S	4 May 2005 17:45:15 -0000	1.7
++++ libc/sysdeps/i386/fpu/e_powf.S	5 Mar 2007 19:38:51 -0000	1.8
+@@ -155,10 +155,11 @@ ENTRY(__ieee754_powf)
+ 2:	/* y is a real number.  */
+ 	fxch			// x : y
+ 	fldl	MO(one)		// 1.0 : x : y
+-	fld	%st(1)		// x : 1.0 : x : y
+-	fsub	%st(1)		// x-1 : 1.0 : x : y
+-	fabs			// |x-1| : 1.0 : x : y
+-	fcompl	MO(limit)	// 1.0 : x : y
++	fldl	MO(limit)	// 0.29 : 1.0 : x : y
++	fld	%st(2)		// x : 0.29 : 1.0 : x : y
++	fsub	%st(2)		// x-1 : 0.29 : 1.0 : x : y
++	fabs			// |x-1| : 0.29 : 1.0 : x : y
++	fucompp			// 1.0 : x : y
+ 	fnstsw
+ 	fxch			// x : 1.0 : y
+ 	sahf
+@@ -191,9 +192,10 @@ ENTRY(__ieee754_powf)
+ 	// y == 켲nf
+ 	.align ALIGNARG(4)
+ 12:	fstp	%st(0)		// pop y
+-	flds	4(%esp)		// x
+-	fabs
+-	fcompl	MO(one)		// < 1, == 1, or > 1
++	fldl	MO(one)		// 1
++	flds	4(%esp)		// x : 1
++	fabs			// abs(x) : 1
++	fucompp			// < 1, == 1, or > 1
+ 	fnstsw
+ 	andb	$0x45, %ah
+ 	cmpb	$0x45, %ah
+--- libc/sysdeps/i386/fpu/e_powl.S	4 May 2005 17:45:15 -0000	1.7
++++ libc/sysdeps/i386/fpu/e_powl.S	5 Mar 2007 19:38:51 -0000	1.8
+@@ -161,10 +161,11 @@ ENTRY(__ieee754_powl)
+ 2:	/* y is a real number.  */
+ 	fxch			// x : y
+ 	fldl	MO(one)		// 1.0 : x : y
+-	fld	%st(1)		// x : 1.0 : x : y
+-	fsub	%st(1)		// x-1 : 1.0 : x : y
+-	fabs			// |x-1| : 1.0 : x : y
+-	fcompl	MO(limit)	// 1.0 : x : y
++	fldl	MO(limit)	// 0.29 : 1.0 : x : y
++	fld	%st(2)		// x : 0.29 : 1.0 : x : y
++	fsub	%st(2)		// x-1 : 0.29 : 1.0 : x : y
++	fabs			// |x-1| : 0.29 : 1.0 : x : y
++	fucompp			// 1.0 : x : y
+ 	fnstsw
+ 	fxch			// x : 1.0 : y
+ 	sahf
+@@ -210,9 +211,10 @@ ENTRY(__ieee754_powl)
+ 	// y == 켲nf
+ 	.align ALIGNARG(4)
+ 12:	fstp	%st(0)		// pop y
+-	fldt	4(%esp)		// x
+-	fabs
+-	fcompl	MO(one)		// < 1, == 1, or > 1
++	fldl	MO(one)		// 1
++	fldt	4(%esp)		// x : 1
++	fabs			// abs(x) : 1
++	fucompp			// < 1, == 1, or > 1
+ 	fnstsw
+ 	andb	$0x45, %ah
+ 	cmpb	$0x45, %ah
+--- libc/sysdeps/ieee754/dbl-64/e_pow.c	23 Jan 2004 13:16:24 -0000	1.13
++++ libc/sysdeps/ieee754/dbl-64/e_pow.c	5 Mar 2007 19:37:40 -0000	1.14
+@@ -106,20 +106,28 @@ double __ieee754_pow(double x, double y)
+     else
+       return y < 0 ? 1.0/ABS(x) : 0.0;                               /* return 0 */
+   }
++
++  qx = u.i[HIGH_HALF]&0x7fffffff;  /*   no sign   */
++  qy = v.i[HIGH_HALF]&0x7fffffff;  /*   no sign   */
++
++  if (qx >= 0x7ff00000 && (qx > 0x7ff00000 || u.i[LOW_HALF] != 0)) return NaNQ.x;
++  if (qy >= 0x7ff00000 && (qy > 0x7ff00000 || v.i[LOW_HALF] != 0))
++    return x == 1.0 ? 1.0 : NaNQ.x;
++
+   /* if x<0 */
+   if (u.i[HIGH_HALF] < 0) {
+     k = checkint(y);
+     if (k==0) {
+-      if ((v.i[HIGH_HALF] & 0x7fffffff) == 0x7ff00000 && v.i[LOW_HALF] == 0) {
++      if (qy == 0x7ff00000) {
+ 	if (x == -1.0) return 1.0;
+ 	else if (x > -1.0) return v.i[HIGH_HALF] < 0 ? INF.x : 0.0;
+ 	else return v.i[HIGH_HALF] < 0 ? 0.0 : INF.x;
+       }
+-      else if (u.i[HIGH_HALF] == 0xfff00000 && u.i[LOW_HALF] == 0)
++      else if (qx == 0x7ff00000)
+ 	return y < 0 ? 0.0 : INF.x;
+       return NaNQ.x;                              /* y not integer and x<0 */
+     }
+-    else if (u.i[HIGH_HALF] == 0xfff00000 && u.i[LOW_HALF] == 0)
++    else if (qx == 0x7ff00000)
+       {
+ 	if (k < 0)
+ 	  return y < 0 ? nZERO.x : nINF.x;
+@@ -129,14 +137,6 @@ double __ieee754_pow(double x, double y)
+     return (k==1)?__ieee754_pow(-x,y):-__ieee754_pow(-x,y); /* if y even or odd */
+   }
+   /* x>0 */
+-  qx = u.i[HIGH_HALF]&0x7fffffff;  /*   no sign   */
+-  qy = v.i[HIGH_HALF]&0x7fffffff;  /*   no sign   */
+-
+-  if (qx > 0x7ff00000 || (qx == 0x7ff00000 && u.i[LOW_HALF] != 0)) return NaNQ.x;
+-                                                                 /*  if 0<x<2^-0x7fe */
+-  if (qy > 0x7ff00000 || (qy == 0x7ff00000 && v.i[LOW_HALF] != 0))
+-    return x == 1.0 ? 1.0 : NaNQ.x;
+-                                                                 /*  if y<2^-0x7fe   */
+ 
+   if (qx == 0x7ff00000)                              /* x= 2^-0x3ff */
+     {if (y == 0) return NaNQ.x;
+--- libc/sysdeps/x86_64/fpu/e_powl.S	20 Jul 2004 07:05:58 -0000	1.2
++++ libc/sysdeps/x86_64/fpu/e_powl.S	5 Mar 2007 19:38:52 -0000	1.3
+@@ -146,10 +147,11 @@ ENTRY(__ieee754_powl)
+ 2:	/* y is a real number.  */
+ 	fxch			// x : y
+ 	fldl	MO(one)		// 1.0 : x : y
+-	fld	%st(1)		// x : 1.0 : x : y
+-	fsub	%st(1)		// x-1 : 1.0 : x : y
+-	fabs			// |x-1| : 1.0 : x : y
+-	fcompl	MO(limit)	// 1.0 : x : y
++	fldl	MO(limit)	// 0.29 : 1.0 : x : y
++	fld	%st(2)		// x : 0.29 : 1.0 : x : y
++	fsub	%st(2)		// x-1 : 0.29 : 1.0 : x : y
++	fabs			// |x-1| : 0.29 : 1.0 : x : y
++	fucompp			// 1.0 : x : y
+ 	fnstsw
+ 	fxch			// x : 1.0 : y
+ 	test	$4500,%eax
+@@ -190,9 +192,10 @@ ENTRY(__ieee754_powl)
+ 	// y == 켲nf
+ 	.align ALIGNARG(4)
+ 12:	fstp	%st(0)		// pop y
+-	fldt	8(%rsp)		// x
+-	fabs
+-	fcompl	MO(one)		// < 1, == 1, or > 1
++	fldl	MO(one)		// 1
++	fldt	8(%rsp)		// x : 1
++	fabs			// abs(x) : 1
++	fucompp			// < 1, == 1, or > 1
+ 	fnstsw
+ 	andb	$0x45, %ah
+ 	cmpb	$0x45, %ah
+--- libc/math/libm-test.inc	20 Sep 2006 19:36:26 -0000	1.73
++++ libc/math/libm-test.inc	5 Mar 2007 19:37:53 -0000	1.74
+@@ -4614,6 +4614,17 @@ pow_test (void)
+ 
+   /* pow (x, NaN) == NaN.  */
+   TEST_ff_f (pow, 3.0, nan_value, nan_value);
++  TEST_ff_f (pow, minus_zero, nan_value, nan_value);
++  TEST_ff_f (pow, plus_infty, nan_value, nan_value);
++  TEST_ff_f (pow, -3.0, nan_value, nan_value);
++  TEST_ff_f (pow, minus_infty, nan_value, nan_value);
++
++  TEST_ff_f (pow, nan_value, 3.0, nan_value);
++  TEST_ff_f (pow, nan_value, -3.0, nan_value);
++  TEST_ff_f (pow, nan_value, plus_infty, nan_value);
++  TEST_ff_f (pow, nan_value, minus_infty, nan_value);
++  TEST_ff_f (pow, nan_value, 2.5, nan_value);
++  TEST_ff_f (pow, nan_value, -2.5, nan_value);
+ 
+   TEST_ff_f (pow, 1, plus_infty, 1);
+   TEST_ff_f (pow, -1, plus_infty, 1);

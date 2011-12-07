@@ -1,0 +1,24 @@
+2007-04-19  Ulrich Drepper  <drepper@redhat.com>
+
+	* include/sys/mman.h: Mark madvise hidden.
+	* misc/madvise.c: Add libc_hidden_def.
+
+--- libc/misc/madvise.c	14 Dec 2005 09:36:14 -0000	1.1
++++ libc/misc/madvise.c	19 Apr 2007 17:42:34 -0000	1.2
+@@ -29,5 +29,6 @@ madvise (__ptr_t addr, size_t len, int a
+   __set_errno (ENOSYS);
+   return -1;
+ }
++libc_hidden_def (madvise)
+ stub_warning (madvise)
+ #include <stub-tag.h>
+--- libc/include/sys/mman.h	14 Oct 2005 21:06:10 -0000	1.6
++++ libc/include/sys/mman.h	19 Apr 2007 17:40:54 -0000	1.7
+@@ -12,4 +12,7 @@ extern int __mprotect (void *__addr, siz
+ /* This one is Linux specific.  */
+ extern void *__mremap (void *__addr, size_t __old_len,
+ 		       size_t __new_len, int __flags, ...);
++
++libc_hidden_proto (madvise);
++
+ #endif

@@ -1,0 +1,177 @@
+2007-07-07  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #4745]
+	* stdio-common/vfscanf.c (_IO_vfscanf): Add additional test for EOF
+	in loop to look for conversion specifier to avoid testing of
+	wrong errno value.
+	* stdio-common/Makefile (tests): Add bug18, bug18a, bug19, bug19a.
+	* stdio-common/bug18.c: New file.
+	* stdio-common/bug18a.c: New file.
+	* stdio-common/bug19.c: New file.
+	* stdio-common/bug19a.c: New file.
+
+--- libc/stdio-common/vfscanf.c	27 Apr 2007 19:28:32 -0000	1.123
++++ libc/stdio-common/vfscanf.c	8 Jul 2007 04:41:22 -0000	1.124
+@@ -537,12 +537,17 @@ _IO_vfscanf_internal (_IO_FILE *s, const
+ 	{
+ 	  /* Eat whitespace.  */
+ 	  int save_errno = errno;
+-	  errno = 0;
++	  __set_errno (0);
+ 	  do
+-	    if (__builtin_expect (inchar () == EOF && errno == EINTR, 0))
++	    /* We add the additional test for EOF here since otherwise
++	       inchar will restore the old errno value which might be
++	       EINTR but does not indicate an interrupt since nothing
++	       was read at this time.  */
++	    if (__builtin_expect ((c == EOF || inchar () == EOF)
++				  && errno == EINTR, 0))
+ 	      input_error ();
+ 	  while (ISSPACE (c));
+-	  errno = save_errno;
++	  __set_errno (save_errno);
+ 	  ungetc (c, s);
+ 	  skip_space = 0;
+ 	}
+--- libc/stdio-common/Makefile	4 Jun 2007 14:38:03 -0000	1.101
++++ libc/stdio-common/Makefile	8 Jul 2007 04:41:08 -0000	1.104
+@@ -54,7 +54,7 @@ tests := tstscanf test_rdwr test-popen t
+ 	 tst-swprintf tst-fseek tst-fmemopen test-vfprintf tst-gets \
+ 	 tst-perror tst-sprintf tst-rndseek tst-fdopen tst-fphex bug14 bug15 \
+ 	 tst-popen tst-unlockedio tst-fmemopen2 tst-put-error tst-fgets \
+-	 tst-fwrite bug16 bug17 tst-sprintf2
++	 tst-fwrite bug16 bug17 tst-sprintf2 bug18 bug18a bug19 bug19a
+ 
+ test-srcs = tst-unbputc tst-printf
+ 
+--- libc/stdio-common/bug18.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdio-common/bug18.c	7 Jul 2007 21:37:37 -0000	1.2
+@@ -0,0 +1,48 @@
++#include <assert.h>
++#include <errno.h>
++#include <stdio.h>
++
++#ifndef CHAR
++# define CHAR char
++# define L(str) str
++# define SSCANF sscanf
++#endif
++
++
++static int
++do_test (void)
++{
++  printf("setting errno to EINTR\n");
++  errno = EINTR;
++
++  printf("checking sscanf\n");
++
++  CHAR str[] = L("7-11");
++  int i, j, n;
++
++  i = j = n = 0;
++  SSCANF (str, L(" %i - %i %n"), &i, &j, &n);
++  printf ("found %i-%i (length=%i)\n", i, j, n);
++
++  int result = 0;
++  if (i != 7)
++    {
++      printf ("i is %d, expected 7\n", i);
++      result = 1;
++    }
++  if (j != 11)
++    {
++      printf ("j is %d, expected 11\n", j);
++      result = 1;
++    }
++  if (n != 4)
++    {
++      printf ("n is %d, expected 4\n", j);
++      result = 1;
++    }
++
++  return result;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/stdio-common/bug18a.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdio-common/bug18a.c	7 Jul 2007 21:38:10 -0000	1.1
+@@ -0,0 +1,6 @@
++#include <wchar.h>
++#define CHAR wchar_t
++#define L(str) L##str
++#define SSCANF swscanf
++
++#include "bug18.c"
+--- libc/stdio-common/bug19.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdio-common/bug19.c	8 Jul 2007 04:40:55 -0000	1.1
+@@ -0,0 +1,58 @@
++#include <assert.h>
++#include <errno.h>
++#include <stdio.h>
++
++#ifndef CHAR
++# define CHAR char
++# define L(str) str
++# define FPUTS fputs
++# define FSCANF fscanf
++#endif
++
++
++static int
++do_test (void)
++{
++  FILE *fp = tmpfile ();
++  if (fp == NULL)
++    {
++      puts ("cannot open file");
++      return 1;
++    }
++
++  FPUTS (L("7-11"), fp);
++  rewind (fp);
++
++  printf("setting errno to EINTR\n");
++  errno = EINTR;
++
++  printf("checking sscanf\n");
++
++  int i, j, n;
++
++  i = j = n = 0;
++  FSCANF (fp, L(" %i - %i %n"), &i, &j, &n);
++  printf ("found %i-%i (length=%i)\n", i, j, n);
++
++  int result = 0;
++  if (i != 7)
++    {
++      printf ("i is %d, expected 7\n", i);
++      result = 1;
++    }
++  if (j != 11)
++    {
++      printf ("j is %d, expected 11\n", j);
++      result = 1;
++    }
++  if (n != 4)
++    {
++      printf ("n is %d, expected 4\n", j);
++      result = 1;
++    }
++
++  return result;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/stdio-common/bug19a.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdio-common/bug19a.c	8 Jul 2007 04:40:55 -0000	1.1
+@@ -0,0 +1,7 @@
++#include <wchar.h>
++#define CHAR wchar_t
++#define L(str) L##str
++#define FPUTS fputws
++#define FSCANF fwscanf
++
++#include "bug19.c"

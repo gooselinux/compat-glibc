@@ -1,0 +1,14 @@
+2007-11-07  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* sysdeps/x86_64/memset.S: Add sfence after movnti.
+
+--- libc/sysdeps/x86_64/memset.S	18 Oct 2007 00:09:32 -0000	1.11
++++ libc/sysdeps/x86_64/memset.S	8 Nov 2007 01:06:30 -0000	1.12
+@@ -127,6 +127,7 @@ L(memset_entry):
+ 	add	$0x40,%rcx
+ 	dec	%rax
+ 	jne	11b
++	sfence
+ 	jmp	4b
+ 
+ END (memset)

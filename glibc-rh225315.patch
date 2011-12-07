@@ -1,0 +1,1104 @@
+2007-01-31  Jakub Jelinek  <jakub@redhat.com>
+
+	* nscd/nscd-client.h (__nscd_cache_search): Remove const qualifier
+	from return value.
+	* nscd/nscd_helper.c: Include string.h.
+	(__nscd_cache_search): Remove const qualifier from return value.
+	On strict alignment architectures check hash entry and data head
+	alignment.
+	* nscd/nscd_getpw_r.c (nscd_getpw_r): Don't crash or fail because
+	mmapped data during GC cycle contains garbage.  If
+	__nscd_drop_map_ref fails, decrement mapped->counter when returning
+	error or if retrying with NO_MAPPING, only __nscd_unmap if counter
+	dropped to 0.
+	* nscd/nscd_getgr_r.c (nscd_getgr_r): Likewise.
+	* nscd/nscd_initgroups.c (__nscd_getgrouplist): Likewise.
+	* nscd/nscd_gethst_r.c (nscd_gethst_r): Likewise.
+	* nscd/nscd_getai.c (__nscd_getai): Likewise.
+
+--- libc/nscd/nscd-client.h	14 Jan 2007 05:23:40 -0000	1.24
++++ libc/nscd/nscd-client.h	31 Jan 2007 09:14:21 -0000	1.25
+@@ -323,10 +323,10 @@ static inline int __nscd_drop_map_ref (s
+ 
+ 
+ /* Search the mapped database.  */
+-extern const struct datahead *__nscd_cache_search (request_type type,
+-						   const char *key,
+-						   size_t keylen,
+-						   const struct mapped_database *mapped);
++extern struct datahead *__nscd_cache_search (request_type type,
++					     const char *key,
++					     size_t keylen,
++					     const struct mapped_database *mapped);
+ 
+ /* Wrappers around read, readv and write that only read/write less than LEN
+    bytes on error or EOF.  */
+--- libc/nscd/nscd_getai.c	15 May 2006 20:31:29 -0000	1.12
++++ libc/nscd/nscd_getai.c	31 Jan 2007 09:14:21 -0000	1.13
+@@ -42,6 +42,7 @@ __nscd_getai (const char *key, struct ns
+ {
+   size_t keylen = strlen (key) + 1;
+   int gc_cycle;
++  int nretries = 0;
+ 
+   /* If the mapping is available, try to search there instead of
+      communicating with the nscd.  */
+@@ -50,49 +51,53 @@ __nscd_getai (const char *key, struct ns
+ 			       &gc_cycle);
+ 
+  retry:;
+-  const ai_response_header *ai_resp = NULL;
+   struct nscd_ai_result *resultbuf = NULL;
+   const char *recend = (const char *) ~UINTMAX_C (0);
+   char *respdata = NULL;
+   int retval = -1;
+   int sock = -1;
++  ai_response_header ai_resp;
+ 
+   if (mapped != NO_MAPPING)
+     {
+-      const struct datahead *found = __nscd_cache_search (GETAI, key, keylen,
+-							  mapped);
++      struct datahead *found = __nscd_cache_search (GETAI, key, keylen,
++						    mapped);
+       if (found != NULL)
+ 	{
+-	  ai_resp = &found->data[0].aidata;
+-	  respdata = (char *) (ai_resp + 1);
++	  respdata = (char *) (&found->data[0].aidata + 1);
++	  ai_resp = found->data[0].aidata;
+ 	  recend = (const char *) found->data + found->recsize;
++	  /* Now check if we can trust ai_resp fields.  If GC is
++	     in progress, it can contain anything.  */
++	  if (mapped->head->gc_cycle != gc_cycle)
++	    {
++	      retval = -2;
++	      goto out;
++	    }
+ 	}
+     }
+ 
+   /* If we do not have the cache mapped, try to get the data over the
+      socket.  */
+-  ai_response_header ai_resp_mem;
+-  if (ai_resp == NULL)
++  if (respdata == NULL)
+     {
+-      sock = __nscd_open_socket (key, keylen, GETAI, &ai_resp_mem,
+-				 sizeof (ai_resp_mem));
++      sock = __nscd_open_socket (key, keylen, GETAI, &ai_resp,
++				 sizeof (ai_resp));
+       if (sock == -1)
+ 	{
+ 	  /* nscd not running or wrong version.  */
+ 	  __nss_not_use_nscd_hosts = 1;
+ 	  goto out;
+ 	}
+-
+-      ai_resp = &ai_resp_mem;
+     }
+ 
+-  if (ai_resp->found == 1)
++  if (ai_resp.found == 1)
+     {
+-      size_t datalen = ai_resp->naddrs + ai_resp->addrslen + ai_resp->canonlen;
++      size_t datalen = ai_resp.naddrs + ai_resp.addrslen + ai_resp.canonlen;
+ 
+-      /* This check is really only affects the case where the data
++      /* This check really only affects the case where the data
+ 	 comes from the mapped cache.  */
+-      if ((char *) (ai_resp + 1) + datalen > recend)
++      if (respdata + datalen > recend)
+ 	{
+ 	  assert (sock == -1);
+ 	  goto out;
+@@ -108,10 +113,10 @@ __nscd_getai (const char *key, struct ns
+ 	}
+ 
+       /* Set up the data structure, including pointers.  */
+-      resultbuf->naddrs = ai_resp->naddrs;
++      resultbuf->naddrs = ai_resp.naddrs;
+       resultbuf->addrs = (char *) (resultbuf + 1);
+-      resultbuf->family = (uint8_t *) (resultbuf->addrs + ai_resp->addrslen);
+-      if (ai_resp->canonlen != 0)
++      resultbuf->family = (uint8_t *) (resultbuf->addrs + ai_resp.addrslen);
++      if (ai_resp.canonlen != 0)
+ 	resultbuf->canon = (char *) (resultbuf->family + resultbuf->naddrs);
+       else
+ 	resultbuf->canon = NULL;
+@@ -137,10 +142,13 @@ __nscd_getai (const char *key, struct ns
+ 
+ 	  /* Try to detect corrupt databases.  */
+ 	  if (resultbuf->canon != NULL
+-	      && resultbuf->canon[ai_resp->canonlen - 1] != '\0')
++	      && resultbuf->canon[ai_resp.canonlen - 1] != '\0')
+ 	    /* We cannot use the database.  */
+ 	    {
+-	      free (resultbuf);
++	      if (mapped->head->gc_cycle != gc_cycle)
++		retval = -2;
++	      else
++		free (resultbuf);
+ 	      goto out_close;
+ 	    }
+ 
+@@ -150,7 +158,7 @@ __nscd_getai (const char *key, struct ns
+     }
+   else
+     {
+-      if (__builtin_expect (ai_resp->found == -1, 0))
++      if (__builtin_expect (ai_resp.found == -1, 0))
+ 	{
+ 	  /* The daemon does not cache this database.  */
+ 	  __nss_not_use_nscd_hosts = 1;
+@@ -158,7 +166,7 @@ __nscd_getai (const char *key, struct ns
+ 	}
+ 
+       /* Store the error number.  */
+-      *h_errnop = ai_resp->error;
++      *h_errnop = ai_resp.error;
+ 
+       /* The `errno' to some value != ERANGE.  */
+       __set_errno (ENOENT);
+@@ -170,22 +178,25 @@ __nscd_getai (const char *key, struct ns
+   if (sock != -1)
+     close_not_cancel_no_status (sock);
+  out:
+-  if (__nscd_drop_map_ref (mapped, &gc_cycle) != 0 && retval != -1)
++  if (__nscd_drop_map_ref (mapped, &gc_cycle) != 0)
+     {
+       /* When we come here this means there has been a GC cycle while we
+ 	 were looking for the data.  This means the data might have been
+ 	 inconsistent.  Retry if possible.  */
+-      if ((gc_cycle & 1) != 0)
++      if ((gc_cycle & 1) != 0 || ++nretries == 5 || retval == -1)
+ 	{
+ 	  /* nscd is just running gc now.  Disable using the mapping.  */
+-	  __nscd_unmap (mapped);
++	  if (atomic_decrement_val (&mapped->counter) == 0)
++	    __nscd_unmap (mapped);
+ 	  mapped = NO_MAPPING;
+ 	}
+ 
+-      *result = NULL;
+-      free (resultbuf);
+-
+-      goto retry;
++      if (retval != -1)
++	{
++	  *result = NULL;
++	  free (resultbuf);
++	  goto retry;
++	}
+     }
+ 
+   return retval;
+--- libc/nscd/nscd_getgr_r.c	15 May 2006 20:39:34 -0000	1.42
++++ libc/nscd/nscd_getgr_r.c	31 Jan 2007 09:14:21 -0000	1.43
+@@ -88,6 +89,7 @@ nscd_getgr_r (const char *key, size_t ke
+ 	      struct group **result)
+ {
+   int gc_cycle;
++  int nretries = 0;
+   const uint32_t *len = NULL;
+   size_t lensize = 0;
+ 
+@@ -97,55 +99,59 @@ nscd_getgr_r (const char *key, size_t ke
+ 						       &__gr_map_handle,
+ 						       &gc_cycle);
+  retry:;
+-  const gr_response_header *gr_resp = NULL;
+   const char *gr_name = NULL;
+   size_t gr_name_len = 0;
+   int retval = -1;
+   const char *recend = (const char *) ~UINTMAX_C (0);
++  gr_response_header gr_resp;
+ 
+   if (mapped != NO_MAPPING)
+     {
+-      const struct datahead *found = __nscd_cache_search (type, key, keylen,
+-							  mapped);
++      struct datahead *found = __nscd_cache_search (type, key, keylen, mapped);
+       if (found != NULL)
+ 	{
+-	  gr_resp = &found->data[0].grdata;
+-	  len = (const uint32_t *) (gr_resp + 1);
+-	  /* The alignment is always sufficient.  */
+-	  assert (((uintptr_t) len & (__alignof__ (*len) - 1)) == 0);
++	  len = (const uint32_t *) (&found->data[0].grdata + 1);
++	  gr_resp = found->data[0].grdata;
+ 	  gr_name = ((const char *) len
+-		     + gr_resp->gr_mem_cnt * sizeof (uint32_t));
+-	  gr_name_len = gr_resp->gr_name_len + gr_resp->gr_passwd_len;
++		     + gr_resp.gr_mem_cnt * sizeof (uint32_t));
++	  gr_name_len = gr_resp.gr_name_len + gr_resp.gr_passwd_len;
+ 	  recend = (const char *) found->data + found->recsize;
++	  /* Now check if we can trust gr_resp fields.  If GC is
++	     in progress, it can contain anything.  */
++	  if (mapped->head->gc_cycle != gc_cycle)
++	    {
++	      retval = -2;
++	      goto out;
++	    }
++
++	  /* The alignment is always sufficient, unless GC is in progress.  */
++	  assert (((uintptr_t) len & (__alignof__ (*len) - 1)) == 0);
+ 	}
+     }
+ 
+-  gr_response_header gr_resp_mem;
+   int sock = -1;
+-  if (gr_resp == NULL)
++  if (gr_name == NULL)
+     {
+-      sock = __nscd_open_socket (key, keylen, type, &gr_resp_mem,
+-				 sizeof (gr_resp_mem));
++      sock = __nscd_open_socket (key, keylen, type, &gr_resp,
++				 sizeof (gr_resp));
+       if (sock == -1)
+ 	{
+ 	  __nss_not_use_nscd_group = 1;
+ 	  goto out;
+ 	}
+-
+-      gr_resp = &gr_resp_mem;
+     }
+ 
+   /* No value found so far.  */
+   *result = NULL;
+ 
+-  if (__builtin_expect (gr_resp->found == -1, 0))
++  if (__builtin_expect (gr_resp.found == -1, 0))
+     {
+       /* The daemon does not cache this database.  */
+       __nss_not_use_nscd_group = 1;
+       goto out_close;
+     }
+ 
+-  if (gr_resp->found == 1)
++  if (gr_resp.found == 1)
+     {
+       struct iovec vec[2];
+       char *p = buffer;
+@@ -157,8 +163,8 @@ nscd_getgr_r (const char *key, size_t ke
+ 	 align the pointer.  */
+       align = ((__alignof__ (char *) - (p - ((char *) 0)))
+ 	       & (__alignof__ (char *) - 1));
+-      total_len = (align + (1 + gr_resp->gr_mem_cnt) * sizeof (char *)
+-		   + gr_resp->gr_name_len + gr_resp->gr_passwd_len);
++      total_len = (align + (1 + gr_resp.gr_mem_cnt) * sizeof (char *)
++		   + gr_resp.gr_name_len + gr_resp.gr_passwd_len);
+       if (__builtin_expect (buflen < total_len, 0))
+ 	{
+ 	no_room:
+@@ -170,16 +176,16 @@ nscd_getgr_r (const char *key, size_t ke
+ 
+       p += align;
+       resultbuf->gr_mem = (char **) p;
+-      p += (1 + gr_resp->gr_mem_cnt) * sizeof (char *);
++      p += (1 + gr_resp.gr_mem_cnt) * sizeof (char *);
+ 
+       /* Set pointers for strings.  */
+       resultbuf->gr_name = p;
+-      p += gr_resp->gr_name_len;
++      p += gr_resp.gr_name_len;
+       resultbuf->gr_passwd = p;
+-      p += gr_resp->gr_passwd_len;
++      p += gr_resp.gr_passwd_len;
+ 
+       /* Fill in what we know now.  */
+-      resultbuf->gr_gid = gr_resp->gr_gid;
++      resultbuf->gr_gid = gr_resp.gr_gid;
+ 
+       /* Read the length information, group name, and password.  */
+       if (gr_name == NULL)
+@@ -187,17 +193,17 @@ nscd_getgr_r (const char *key, size_t ke
+ 	  /* Allocate array to store lengths.  */
+ 	  if (lensize == 0)
+ 	    {
+-	      lensize = gr_resp->gr_mem_cnt * sizeof (uint32_t);
++	      lensize = gr_resp.gr_mem_cnt * sizeof (uint32_t);
+ 	      len = (uint32_t *) alloca (lensize);
+ 	    }
+-	  else if (gr_resp->gr_mem_cnt * sizeof (uint32_t) > lensize)
++	  else if (gr_resp.gr_mem_cnt * sizeof (uint32_t) > lensize)
+ 	    len = extend_alloca (len, lensize,
+-				 gr_resp->gr_mem_cnt * sizeof (uint32_t));
++				 gr_resp.gr_mem_cnt * sizeof (uint32_t));
+ 
+ 	  vec[0].iov_base = (void *) len;
+-	  vec[0].iov_len = gr_resp->gr_mem_cnt * sizeof (uint32_t);
++	  vec[0].iov_len = gr_resp.gr_mem_cnt * sizeof (uint32_t);
+ 	  vec[1].iov_base = resultbuf->gr_name;
+-	  vec[1].iov_len = gr_resp->gr_name_len + gr_resp->gr_passwd_len;
++	  vec[1].iov_len = gr_resp.gr_name_len + gr_resp.gr_passwd_len;
+ 	  total_len = vec[0].iov_len + vec[1].iov_len;
+ 
+ 	  /* Get this data.  */
+@@ -209,14 +215,14 @@ nscd_getgr_r (const char *key, size_t ke
+ 	/* We already have the data.  Just copy the group name and
+ 	   password.  */
+ 	memcpy (resultbuf->gr_name, gr_name,
+-		gr_resp->gr_name_len + gr_resp->gr_passwd_len);
++		gr_resp.gr_name_len + gr_resp.gr_passwd_len);
+ 
+       /* Clear the terminating entry.  */
+-      resultbuf->gr_mem[gr_resp->gr_mem_cnt] = NULL;
++      resultbuf->gr_mem[gr_resp.gr_mem_cnt] = NULL;
+ 
+       /* Prepare reading the group members.  */
+       total_len = 0;
+-      for (cnt = 0; cnt < gr_resp->gr_mem_cnt; ++cnt)
++      for (cnt = 0; cnt < gr_resp.gr_mem_cnt; ++cnt)
+ 	{
+ 	  resultbuf->gr_mem[cnt] = p;
+ 	  total_len += len[cnt];
+@@ -224,9 +230,25 @@ nscd_getgr_r (const char *key, size_t ke
+ 	}
+ 
+       if (__builtin_expect (gr_name + gr_name_len + total_len > recend, 0))
+-	goto out_close;
++	{
++	  /* len array might contain garbage during nscd GC cycle,
++	     retry rather than fail in that case.  */
++	  if (gr_name != NULL && mapped->head->gc_cycle != gc_cycle)
++	    retval = -2;
++	  goto out_close;
++	}
+       if (__builtin_expect (total_len > buflen, 0))
+-	goto no_room;
++	{
++	  /* len array might contain garbage during nscd GC cycle,
++	     retry rather than fail in that case.  */
++	  if (gr_name != NULL && mapped->head->gc_cycle != gc_cycle)
++	    {
++	      retval = -2;
++	      goto out_close;
++	    }
++	  else
++	    goto no_room;
++	}
+ 
+       retval = 0;
+       if (gr_name == NULL)
+@@ -248,14 +270,14 @@ nscd_getgr_r (const char *key, size_t ke
+ 
+ 	  /* Try to detect corrupt databases.  */
+ 	  if (resultbuf->gr_name[gr_name_len - 1] != '\0'
+-	      || resultbuf->gr_passwd[gr_resp->gr_passwd_len - 1] != '\0'
+-	      || ({for (cnt = 0; cnt < gr_resp->gr_mem_cnt; ++cnt)
++	      || resultbuf->gr_passwd[gr_resp.gr_passwd_len - 1] != '\0'
++	      || ({for (cnt = 0; cnt < gr_resp.gr_mem_cnt; ++cnt)
+ 		     if (resultbuf->gr_mem[cnt][len[cnt] - 1] != '\0')
+ 		       break;
+-	  	   cnt < gr_resp->gr_mem_cnt; }))
++	  	   cnt < gr_resp.gr_mem_cnt; }))
+ 	    {
+ 	      /* We cannot use the database.  */
+-	      retval = -1;
++	      retval = mapped->head->gc_cycle != gc_cycle ? -2 : -1;
+ 	      goto out_close;
+ 	    }
+ 
+@@ -274,19 +296,21 @@ nscd_getgr_r (const char *key, size_t ke
+   if (sock != -1)
+     close_not_cancel_no_status (sock);
+  out:
+-  if (__nscd_drop_map_ref (mapped, &gc_cycle) != 0 && retval != -1)
++  if (__nscd_drop_map_ref (mapped, &gc_cycle) != 0)
+     {
+       /* When we come here this means there has been a GC cycle while we
+ 	 were looking for the data.  This means the data might have been
+ 	 inconsistent.  Retry if possible.  */
+-      if ((gc_cycle & 1) != 0)
++      if ((gc_cycle & 1) != 0 || ++nretries == 5 || retval == -1)
+ 	{
+ 	  /* nscd is just running gc now.  Disable using the mapping.  */
+-	  __nscd_unmap (mapped);
++	  if (atomic_decrement_val (&mapped->counter) == 0)
++	    __nscd_unmap (mapped);
+ 	  mapped = NO_MAPPING;
+ 	}
+ 
+-      goto retry;
++      if (retval != -1)
++	goto retry;
+     }
+ 
+   return retval;
+--- libc/nscd/nscd_gethst_r.c	13 Jan 2007 07:30:16 -0000	1.35
++++ libc/nscd/nscd_gethst_r.c	31 Jan 2007 09:14:21 -0000	1.36
+@@ -118,7 +118,6 @@ nscd_gethst_r (const char *key, size_t k
+ 			       &gc_cycle);
+ 
+  retry:;
+-  const hst_response_header *hst_resp = NULL;
+   const char *h_name = NULL;
+   const uint32_t *aliases_len = NULL;
+   const char *addr_list = NULL;
+@@ -126,18 +125,27 @@ nscd_gethst_r (const char *key, size_t k
+   int retval = -1;
+   const char *recend = (const char *) ~UINTMAX_C (0);
+   int sock = -1;
++  hst_response_header hst_resp;
+   if (mapped != NO_MAPPING)
+     {
+-      const struct datahead *found = __nscd_cache_search (type, key, keylen,
+-							  mapped);
++      /* No const qualifier, as it can change during garbage collection.  */
++      struct datahead *found = __nscd_cache_search (type, key, keylen, mapped);
+       if (found != NULL)
+ 	{
+-	  hst_resp = &found->data[0].hstdata;
+-	  h_name = (char *) (hst_resp + 1);
+-	  aliases_len = (uint32_t *) (h_name + hst_resp->h_name_len);
++	  h_name = (char *) (&found->data[0].hstdata + 1);
++	  hst_resp = found->data[0].hstdata;
++	  aliases_len = (uint32_t *) (h_name + hst_resp.h_name_len);
+ 	  addr_list = ((char *) aliases_len
+-		       + hst_resp->h_aliases_cnt * sizeof (uint32_t));
+-	  addr_list_len = hst_resp->h_addr_list_cnt * INADDRSZ;
++		       + hst_resp.h_aliases_cnt * sizeof (uint32_t));
++	  addr_list_len = hst_resp.h_addr_list_cnt * INADDRSZ;
++	  recend = (const char *) found->data + found->recsize;
++	  /* Now check if we can trust hst_resp fields.  If GC is
++	     in progress, it can contain anything.  */
++	  if (mapped->head->gc_cycle != gc_cycle)
++	    {
++	      retval = -2;
++	      goto out;
++	    }
+ 
+ #ifndef _STRING_ARCH_unaligned
+ 	  /* The aliases_len array in the mapped database might very
+@@ -147,51 +155,47 @@ nscd_gethst_r (const char *key, size_t k
+ 	  if (((uintptr_t) aliases_len & (__alignof__ (*aliases_len) - 1))
+ 	      != 0)
+ 	    {
+-	      uint32_t *tmp = alloca (hst_resp->h_aliases_cnt
++	      uint32_t *tmp = alloca (hst_resp.h_aliases_cnt
+ 				      * sizeof (uint32_t));
+ 	      aliases_len = memcpy (tmp, aliases_len,
+-				    hst_resp->h_aliases_cnt
++				    hst_resp.h_aliases_cnt
+ 				    * sizeof (uint32_t));
+ 	    }
+ #endif
+ 	  if (type != GETHOSTBYADDR && type != GETHOSTBYNAME)
+ 	    {
+-	      if (hst_resp->h_length == INADDRSZ)
++	      if (hst_resp.h_length == INADDRSZ)
+ 		addr_list += addr_list_len;
+-	      addr_list_len = hst_resp->h_addr_list_cnt * IN6ADDRSZ;
++	      addr_list_len = hst_resp.h_addr_list_cnt * IN6ADDRSZ;
+ 	    }
+-	  recend = (const char *) found->data + found->recsize;
+ 	  if (__builtin_expect ((const char *) addr_list + addr_list_len
+ 				> recend, 0))
+-	    goto out_close;
++	    goto out;
+ 	}
+     }
+ 
+-  hst_response_header hst_resp_mem;
+-  if (hst_resp == NULL)
++  if (h_name == NULL)
+     {
+-      sock = __nscd_open_socket (key, keylen, type, &hst_resp_mem,
+-				 sizeof (hst_resp_mem));
++      sock = __nscd_open_socket (key, keylen, type, &hst_resp,
++				 sizeof (hst_resp));
+       if (sock == -1)
+ 	{
+ 	  __nss_not_use_nscd_hosts = 1;
+-	  goto out;;
++	  goto out;
+ 	}
+-
+-      hst_resp = &hst_resp_mem;
+     }
+ 
+   /* No value found so far.  */
+   *result = NULL;
+ 
+-  if (__builtin_expect (hst_resp->found == -1, 0))
++  if (__builtin_expect (hst_resp.found == -1, 0))
+     {
+       /* The daemon does not cache this database.  */
+       __nss_not_use_nscd_hosts = 1;
+       goto out_close;
+     }
+ 
+-  if (hst_resp->found == 1)
++  if (hst_resp.found == 1)
+     {
+       struct iovec vec[4];
+       char *cp = buffer;
+@@ -207,15 +211,15 @@ nscd_gethst_r (const char *key, size_t k
+ 	 align the pointer and the base of the h_addr_list pointers.  */
+       align1 = ((__alignof__ (char *) - (cp - ((char *) 0)))
+ 		& (__alignof__ (char *) - 1));
+-      align2 = ((__alignof__ (char *) - ((cp + align1 + hst_resp->h_name_len)
++      align2 = ((__alignof__ (char *) - ((cp + align1 + hst_resp.h_name_len)
+ 					 - ((char *) 0)))
+ 		& (__alignof__ (char *) - 1));
+-      if (buflen < (align1 + hst_resp->h_name_len + align2
+-		    + ((hst_resp->h_aliases_cnt + hst_resp->h_addr_list_cnt
++      if (buflen < (align1 + hst_resp.h_name_len + align2
++		    + ((hst_resp.h_aliases_cnt + hst_resp.h_addr_list_cnt
+ 			+ 2)
+ 		       * sizeof (char *))
+-		    + hst_resp->h_addr_list_cnt * (type == AF_INET
+-						   ? INADDRSZ : IN6ADDRSZ)))
++		    + hst_resp.h_addr_list_cnt * (type == AF_INET
++						  ? INADDRSZ : IN6ADDRSZ)))
+ 	{
+ 	no_room:
+ 	  *h_errnop = NETDB_INTERNAL;
+@@ -227,12 +231,12 @@ nscd_gethst_r (const char *key, size_t k
+ 
+       /* Prepare the result as far as we can.  */
+       resultbuf->h_aliases = (char **) cp;
+-      cp += (hst_resp->h_aliases_cnt + 1) * sizeof (char *);
++      cp += (hst_resp.h_aliases_cnt + 1) * sizeof (char *);
+       resultbuf->h_addr_list = (char **) cp;
+-      cp += (hst_resp->h_addr_list_cnt + 1) * sizeof (char *);
++      cp += (hst_resp.h_addr_list_cnt + 1) * sizeof (char *);
+ 
+       resultbuf->h_name = cp;
+-      cp += hst_resp->h_name_len + align2;
++      cp += hst_resp.h_name_len + align2;
+ 
+       if (type == GETHOSTBYADDR || type == GETHOSTBYNAME)
+ 	{
+@@ -244,7 +248,7 @@ nscd_gethst_r (const char *key, size_t k
+ 	  resultbuf->h_addrtype = AF_INET6;
+ 	  resultbuf->h_length = IN6ADDRSZ;
+ 	}
+-      for (cnt = 0; cnt < hst_resp->h_addr_list_cnt; ++cnt)
++      for (cnt = 0; cnt < hst_resp.h_addr_list_cnt; ++cnt)
+ 	{
+ 	  resultbuf->h_addr_list[cnt] = cp;
+ 	  cp += resultbuf->h_length;
+@@ -254,47 +258,47 @@ nscd_gethst_r (const char *key, size_t k
+       if (h_name == NULL)
+ 	{
+ 	  vec[0].iov_base = resultbuf->h_name;
+-	  vec[0].iov_len = hst_resp->h_name_len;
+-	  total_len = hst_resp->h_name_len;
++	  vec[0].iov_len = hst_resp.h_name_len;
++	  total_len = hst_resp.h_name_len;
+ 	  n = 1;
+ 
+-	  if (hst_resp->h_aliases_cnt > 0)
++	  if (hst_resp.h_aliases_cnt > 0)
+ 	    {
+-	      aliases_len = alloca (hst_resp->h_aliases_cnt
++	      aliases_len = alloca (hst_resp.h_aliases_cnt
+ 				    * sizeof (uint32_t));
+ 	      vec[n].iov_base = (void *) aliases_len;
+-	      vec[n].iov_len = hst_resp->h_aliases_cnt * sizeof (uint32_t);
++	      vec[n].iov_len = hst_resp.h_aliases_cnt * sizeof (uint32_t);
+ 
+-	      total_len += hst_resp->h_aliases_cnt * sizeof (uint32_t);
++	      total_len += hst_resp.h_aliases_cnt * sizeof (uint32_t);
+ 	      ++n;
+ 	    }
+ 
+ 	  if (type == GETHOSTBYADDR || type == GETHOSTBYNAME)
+ 	    {
+ 	      vec[n].iov_base = resultbuf->h_addr_list[0];
+-	      vec[n].iov_len = hst_resp->h_addr_list_cnt * INADDRSZ;
++	      vec[n].iov_len = hst_resp.h_addr_list_cnt * INADDRSZ;
+ 
+-	      total_len += hst_resp->h_addr_list_cnt * INADDRSZ;
++	      total_len += hst_resp.h_addr_list_cnt * INADDRSZ;
+ 
+ 	      ++n;
+ 	    }
+ 	  else
+ 	    {
+-	      if (hst_resp->h_length == INADDRSZ)
++	      if (hst_resp.h_length == INADDRSZ)
+ 		{
+-		  ignore = alloca (hst_resp->h_addr_list_cnt * INADDRSZ);
++		  ignore = alloca (hst_resp.h_addr_list_cnt * INADDRSZ);
+ 		  vec[n].iov_base = ignore;
+-		  vec[n].iov_len = hst_resp->h_addr_list_cnt * INADDRSZ;
++		  vec[n].iov_len = hst_resp.h_addr_list_cnt * INADDRSZ;
+ 
+-		  total_len += hst_resp->h_addr_list_cnt * INADDRSZ;
++		  total_len += hst_resp.h_addr_list_cnt * INADDRSZ;
+ 
+ 		  ++n;
+ 		}
+ 
+ 	      vec[n].iov_base = resultbuf->h_addr_list[0];
+-	      vec[n].iov_len = hst_resp->h_addr_list_cnt * IN6ADDRSZ;
++	      vec[n].iov_len = hst_resp.h_addr_list_cnt * IN6ADDRSZ;
+ 
+-	      total_len += hst_resp->h_addr_list_cnt * IN6ADDRSZ;
++	      total_len += hst_resp.h_addr_list_cnt * IN6ADDRSZ;
+ 
+ 	      ++n;
+ 	    }
+@@ -304,13 +308,13 @@ nscd_gethst_r (const char *key, size_t k
+ 	}
+       else
+ 	{
+-	  memcpy (resultbuf->h_name, h_name, hst_resp->h_name_len);
++	  memcpy (resultbuf->h_name, h_name, hst_resp.h_name_len);
+ 	  memcpy (resultbuf->h_addr_list[0], addr_list, addr_list_len);
+ 	}
+ 
+       /*  Now we also can read the aliases.  */
+       total_len = 0;
+-      for (cnt = 0; cnt < hst_resp->h_aliases_cnt; ++cnt)
++      for (cnt = 0; cnt < hst_resp.h_aliases_cnt; ++cnt)
+ 	{
+ 	  resultbuf->h_aliases[cnt] = cp;
+ 	  cp += aliases_len[cnt];
+@@ -320,10 +324,25 @@ nscd_gethst_r (const char *key, size_t k
+ 
+       if (__builtin_expect ((const char *) addr_list + addr_list_len
+ 			    + total_len > recend, 0))
+-	goto out_close;
++	{
++	  /* aliases_len array might contain garbage during nscd GC cycle,
++	     retry rather than fail in that case.  */
++	  if (addr_list != NULL && mapped->head->gc_cycle != gc_cycle)
++	    retval = -2;
++	  goto out_close;
++	}
+       /* See whether this would exceed the buffer capacity.  */
+       if (__builtin_expect (cp > buffer + buflen, 0))
+-	goto no_room;
++	{
++	  /* aliases_len array might contain garbage during nscd GC cycle,
++	     retry rather than fail in that case.  */
++	  if (addr_list != NULL && mapped->head->gc_cycle != gc_cycle)
++	    {
++	      retval = -2;
++	      goto out_close;
++	    }
++	  goto no_room;
++	}
+ 
+       /* And finally read the aliases.  */
+       if (addr_list == NULL)
+@@ -342,14 +361,18 @@ nscd_gethst_r (const char *key, size_t k
+ 		  (const char *) addr_list + addr_list_len, total_len);
+ 
+ 	  /* Try to detect corrupt databases.  */
+-	  if (resultbuf->h_name[hst_resp->h_name_len - 1] != '\0'
+-	      || ({for (cnt = 0; cnt < hst_resp->h_aliases_cnt; ++cnt)
++	  if (resultbuf->h_name[hst_resp.h_name_len - 1] != '\0'
++	      || ({for (cnt = 0; cnt < hst_resp.h_aliases_cnt; ++cnt)
+ 		     if (resultbuf->h_aliases[cnt][aliases_len[cnt] - 1]
+ 			 != '\0')
+ 		       break;
+-		   cnt < hst_resp->h_aliases_cnt; }))
+-	    /* We cannot use the database.  */
+-	    goto out_close;
++		   cnt < hst_resp.h_aliases_cnt; }))
++	    {
++	      /* We cannot use the database.  */
++	      if (mapped->head->gc_cycle != gc_cycle)
++		retval = -2;
++	      goto out_close;
++	    }
+ 
+ 	  retval = 0;
+ 	  *result = resultbuf;
+@@ -358,7 +381,7 @@ nscd_gethst_r (const char *key, size_t k
+   else
+     {
+       /* Store the error number.  */
+-      *h_errnop = hst_resp->error;
++      *h_errnop = hst_resp.error;
+ 
+       /* The `errno' to some value != ERANGE.  */
+       __set_errno (ENOENT);
+@@ -370,19 +393,21 @@ nscd_gethst_r (const char *key, size_t k
+   if (sock != -1)
+     close_not_cancel_no_status (sock);
+  out:
+-  if (__nscd_drop_map_ref (mapped, &gc_cycle) != 0 && retval != -1)
++  if (__nscd_drop_map_ref (mapped, &gc_cycle) != 0)
+     {
+       /* When we come here this means there has been a GC cycle while we
+ 	 were looking for the data.  This means the data might have been
+ 	 inconsistent.  Retry if possible.  */
+-      if ((gc_cycle & 1) != 0 || ++nretries == 5)
++      if ((gc_cycle & 1) != 0 || ++nretries == 5 || retval == -1)
+ 	{
+ 	  /* nscd is just running gc now.  Disable using the mapping.  */
+-	  __nscd_unmap (mapped);
++	  if (atomic_decrement_val (&mapped->counter) == 0)
++	    __nscd_unmap (mapped);
+ 	  mapped = NO_MAPPING;
+ 	}
+ 
+-      goto retry;
++      if (retval != -1)
++	goto retry;
+     }
+ 
+   return retval;
+--- libc/nscd/nscd_getpw_r.c	22 Sep 2005 14:35:11 -0000	1.31
++++ libc/nscd/nscd_getpw_r.c	31 Jan 2007 09:14:21 -0000	1.32
+@@ -88,76 +89,81 @@ nscd_getpw_r (const char *key, size_t ke
+ 	      struct passwd **result)
+ {
+   int gc_cycle;
++  int nretries = 0;
++
+   /* If the mapping is available, try to search there instead of
+      communicating with the nscd.  */
+   struct mapped_database *mapped;
+   mapped = __nscd_get_map_ref (GETFDPW, "passwd", &map_handle, &gc_cycle);
+ 
+  retry:;
+-  const pw_response_header *pw_resp = NULL;
+   const char *pw_name = NULL;
+   int retval = -1;
+   const char *recend = (const char *) ~UINTMAX_C (0);
++  pw_response_header pw_resp;
+ 
+   if (mapped != NO_MAPPING)
+     {
+-      const struct datahead *found = __nscd_cache_search (type, key, keylen,
+-							  mapped);
++      struct datahead *found = __nscd_cache_search (type, key, keylen, mapped);
+       if (found != NULL)
+ 	{
+-	  pw_resp = &found->data[0].pwdata;
+-	  pw_name = (const char *) (pw_resp + 1);
++	  pw_name = (const char *) (&found->data[0].pwdata + 1);
++	  pw_resp = found->data[0].pwdata;
+ 	  recend = (const char *) found->data + found->recsize;
++	  /* Now check if we can trust pw_resp fields.  If GC is
++	     in progress, it can contain anything.  */
++	  if (mapped->head->gc_cycle != gc_cycle)
++	    {
++	      retval = -2;
++	      goto out;
++	    }
+ 	}
+     }
+ 
+-  pw_response_header pw_resp_mem;
+   int sock = -1;
+-  if (pw_resp == NULL)
++  if (pw_name == NULL)
+     {
+-      sock = __nscd_open_socket (key, keylen, type, &pw_resp_mem,
+-				 sizeof (pw_resp_mem));
++      sock = __nscd_open_socket (key, keylen, type, &pw_resp,
++				 sizeof (pw_resp));
+       if (sock == -1)
+ 	{
+ 	  __nss_not_use_nscd_passwd = 1;
+ 	  goto out;
+ 	}
+-
+-      pw_resp = &pw_resp_mem;
+     }
+ 
+   /* No value found so far.  */
+   *result = NULL;
+ 
+-  if (__builtin_expect (pw_resp->found == -1, 0))
++  if (__builtin_expect (pw_resp.found == -1, 0))
+     {
+       /* The daemon does not cache this database.  */
+       __nss_not_use_nscd_passwd = 1;
+       goto out_close;
+     }
+ 
+-  if (pw_resp->found == 1)
++  if (pw_resp.found == 1)
+     {
+       /* Set the information we already have.  */
+-      resultbuf->pw_uid = pw_resp->pw_uid;
+-      resultbuf->pw_gid = pw_resp->pw_gid;
++      resultbuf->pw_uid = pw_resp.pw_uid;
++      resultbuf->pw_gid = pw_resp.pw_gid;
+ 
+       char *p = buffer;
+       /* get pw_name */
+       resultbuf->pw_name = p;
+-      p += pw_resp->pw_name_len;
++      p += pw_resp.pw_name_len;
+       /* get pw_passwd */
+       resultbuf->pw_passwd = p;
+-      p += pw_resp->pw_passwd_len;
++      p += pw_resp.pw_passwd_len;
+       /* get pw_gecos */
+       resultbuf->pw_gecos = p;
+-      p += pw_resp->pw_gecos_len;
++      p += pw_resp.pw_gecos_len;
+       /* get pw_dir */
+       resultbuf->pw_dir = p;
+-      p += pw_resp->pw_dir_len;
++      p += pw_resp.pw_dir_len;
+       /* get pw_pshell */
+       resultbuf->pw_shell = p;
+-      p += pw_resp->pw_shell_len;
++      p += pw_resp.pw_shell_len;
+ 
+       ssize_t total = p - buffer;
+       if (__builtin_expect (pw_name + total > recend, 0))
+@@ -189,14 +195,14 @@ nscd_getpw_r (const char *key, size_t ke
+ 	  memcpy (resultbuf->pw_name, pw_name, total);
+ 
+ 	  /* Try to detect corrupt databases.  */
+-	  if (resultbuf->pw_name[pw_resp->pw_name_len - 1] != '\0'
+-	      || resultbuf->pw_passwd[pw_resp->pw_passwd_len - 1] != '\0'
+-	      || resultbuf->pw_gecos[pw_resp->pw_gecos_len - 1] != '\0'
+-	      || resultbuf->pw_dir[pw_resp->pw_dir_len - 1] != '\0'
+-	      || resultbuf->pw_shell[pw_resp->pw_shell_len - 1] != '\0')
++	  if (resultbuf->pw_name[pw_resp.pw_name_len - 1] != '\0'
++	      || resultbuf->pw_passwd[pw_resp.pw_passwd_len - 1] != '\0'
++	      || resultbuf->pw_gecos[pw_resp.pw_gecos_len - 1] != '\0'
++	      || resultbuf->pw_dir[pw_resp.pw_dir_len - 1] != '\0'
++	      || resultbuf->pw_shell[pw_resp.pw_shell_len - 1] != '\0')
+ 	    {
+ 	      /* We cannot use the database.  */
+-	      retval = -1;
++	      retval = mapped->head->gc_cycle != gc_cycle ? -2 : -1;
+ 	      goto out_close;
+ 	    }
+ 
+@@ -215,19 +221,21 @@ nscd_getpw_r (const char *key, size_t ke
+   if (sock != -1)
+     close_not_cancel_no_status (sock);
+  out:
+-  if (__nscd_drop_map_ref (mapped, &gc_cycle) != 0 && retval != -1)
++  if (__nscd_drop_map_ref (mapped, &gc_cycle) != 0)
+     {
+       /* When we come here this means there has been a GC cycle while we
+ 	 were looking for the data.  This means the data might have been
+ 	 inconsistent.  Retry if possible.  */
+-      if ((gc_cycle & 1) != 0)
++      if ((gc_cycle & 1) != 0 || ++nretries == 5 || retval == -1)
+ 	{
+ 	  /* nscd is just running gc now.  Disable using the mapping.  */
+-	  __nscd_unmap (mapped);
++	  if (atomic_decrement_val (&mapped->counter) == 0)
++	    __nscd_unmap (mapped);
+ 	  mapped = NO_MAPPING;
+ 	}
+ 
+-      goto retry;
++      if (retval != -1)
++	goto retry;
+     }
+ 
+   return retval;
+--- libc/nscd/nscd_helper.c	2 Oct 2006 16:33:51 -0000	1.17
++++ libc/nscd/nscd_helper.c	31 Jan 2007 09:14:21 -0000	1.18
+@@ -21,6 +22,7 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <stdbool.h>
++#include <string.h>
+ #include <time.h>
+ #include <unistd.h>
+ #include <sys/mman.h>
+@@ -362,7 +364,10 @@ __nscd_get_map_ref (request_type type, c
+ }
+ 
+ 
+-const struct datahead *
++/* Don't return const struct datahead *, as eventhough the record
++   is normally constant, it can change arbitrarily during nscd
++   garbage collection.  */
++struct datahead *
+ __nscd_cache_search (request_type type, const char *key, size_t keylen,
+ 		     const struct mapped_database *mapped)
+ {
+@@ -374,16 +379,32 @@ __nscd_cache_search (request_type type, 
+     {
+       struct hashentry *here = (struct hashentry *) (mapped->data + work);
+ 
++#ifndef _STRING_ARCH_unaligned
++      /* Although during garbage collection when moving struct hashentry
++	 records around we first copy from old to new location and then
++	 adjust pointer from previous hashentry to it, there is no barrier
++	 between those memory writes.  It is very unlikely to hit it,
++	 so check alignment only if a misaligned load can crash the
++	 application.  */
++      if ((uintptr_t) here & (__alignof__ (*here) - 1))
++	return NULL;
++#endif
++
+       if (type == here->type
+ 	  && keylen == here->len
+-	  && here->key + here->len <= datasize
++	  && here->key + keylen <= datasize
+ 	  && memcmp (key, mapped->data + here->key, keylen) == 0
+ 	  && here->packet + sizeof (struct datahead) <= datasize)
+ 	{
+ 	  /* We found the entry.  Increment the appropriate counter.  */
+-	  const struct datahead *dh
++	  struct datahead *dh
+ 	    = (struct datahead *) (mapped->data + here->packet);
+ 
++#ifndef _STRING_ARCH_unaligned
++	  if ((uintptr_t) dh & (__alignof__ (*dh) - 1))
++	    return NULL;
++#endif
++
+ 	  /* See whether we must ignore the entry or whether something
+ 	     is wrong because garbage collection is in progress.  */
+ 	  if (dh->usable && here->packet + dh->allocsize <= datasize)
+--- libc/nscd/nscd_initgroups.c	29 Sep 2006 17:05:21 -0000	1.11
++++ libc/nscd/nscd_initgroups.c	31 Jan 2007 09:14:21 -0000	1.12
+@@ -39,6 +39,7 @@ __nscd_getgrouplist (const char *user, g
+ {
+   size_t userlen = strlen (user) + 1;
+   int gc_cycle;
++  int nretries = 0;
+ 
+   /* If the mapping is available, try to search there instead of
+      communicating with the nscd.  */
+@@ -46,44 +47,49 @@ __nscd_getgrouplist (const char *user, g
+   mapped = __nscd_get_map_ref (GETFDGR, "group", &__gr_map_handle, &gc_cycle);
+ 
+  retry:;
+-  const initgr_response_header *initgr_resp = NULL;
+   char *respdata = NULL;
+   int retval = -1;
+   int sock = -1;
++  initgr_response_header initgr_resp;
+ 
+   if (mapped != NO_MAPPING)
+     {
+-      const struct datahead *found = __nscd_cache_search (INITGROUPS, user,
+-							  userlen, mapped);
++      struct datahead *found = __nscd_cache_search (INITGROUPS, user,
++						    userlen, mapped);
+       if (found != NULL)
+ 	{
+-	  initgr_resp = &found->data[0].initgrdata;
+-	  respdata = (char *) (initgr_resp + 1);
++	  respdata = (char *) (&found->data[0].initgrdata + 1);
++	  initgr_resp = found->data[0].initgrdata;
+ 	  char *recend = (char *) found->data + found->recsize;
+ 
+-	  if (respdata + initgr_resp->ngrps * sizeof (int32_t) > recend)
++	  /* Now check if we can trust initgr_resp fields.  If GC is
++	     in progress, it can contain anything.  */
++	  if (mapped->head->gc_cycle != gc_cycle)
++	    {
++	      retval = -2;
++	      goto out;
++	    }
++
++	  if (respdata + initgr_resp.ngrps * sizeof (int32_t) > recend)
+ 	    goto out;
+ 	}
+     }
+ 
+   /* If we do not have the cache mapped, try to get the data over the
+      socket.  */
+-  initgr_response_header initgr_resp_mem;
+-  if (initgr_resp == NULL)
++  if (respdata == NULL)
+     {
+-      sock = __nscd_open_socket (user, userlen, INITGROUPS, &initgr_resp_mem,
+-				 sizeof (initgr_resp_mem));
++      sock = __nscd_open_socket (user, userlen, INITGROUPS, &initgr_resp,
++				 sizeof (initgr_resp));
+       if (sock == -1)
+ 	{
+ 	  /* nscd not running or wrong version.  */
+ 	  __nss_not_use_nscd_group = 1;
+ 	  goto out;
+ 	}
+-
+-      initgr_resp = &initgr_resp_mem;
+     }
+ 
+-  if (initgr_resp->found == 1)
++  if (initgr_resp.found == 1)
+     {
+       /* The following code assumes that gid_t and int32_t are the
+ 	 same size.  This is the case for al existing implementation.
+@@ -91,40 +97,40 @@ __nscd_getgrouplist (const char *user, g
+ 	 doesn't use memcpy but instead copies each array element one
+ 	 by one.  */
+       assert (sizeof (int32_t) == sizeof (gid_t));
+-      assert (initgr_resp->ngrps >= 0);
++      assert (initgr_resp.ngrps >= 0);
+ 
+       /* Make sure we have enough room.  We always count GROUP in even
+ 	 though we might not end up adding it.  */
+-      if (*size < initgr_resp->ngrps + 1)
++      if (*size < initgr_resp.ngrps + 1)
+ 	{
+ 	  gid_t *newp = realloc (*groupsp,
+-				 (initgr_resp->ngrps + 1) * sizeof (gid_t));
++				 (initgr_resp.ngrps + 1) * sizeof (gid_t));
+ 	  if (newp == NULL)
+ 	    /* We cannot increase the buffer size.  */
+ 	    goto out_close;
+ 
+ 	  *groupsp = newp;
+-	  *size = initgr_resp->ngrps + 1;
++	  *size = initgr_resp.ngrps + 1;
+ 	}
+ 
+       if (respdata == NULL)
+ 	{
+ 	  /* Read the data from the socket.  */
+-	  if ((size_t) __readall (sock, *groupsp, initgr_resp->ngrps
++	  if ((size_t) __readall (sock, *groupsp, initgr_resp.ngrps
+ 						  * sizeof (gid_t))
+-	      == initgr_resp->ngrps * sizeof (gid_t))
+-	    retval = initgr_resp->ngrps;
++	      == initgr_resp.ngrps * sizeof (gid_t))
++	    retval = initgr_resp.ngrps;
+ 	}
+       else
+ 	{
+ 	  /* Just copy the data.  */
+-	  retval = initgr_resp->ngrps;
++	  retval = initgr_resp.ngrps;
+ 	  memcpy (*groupsp, respdata, retval * sizeof (gid_t));
+ 	}
+     }
+   else
+     {
+-      if (__builtin_expect (initgr_resp->found == -1, 0))
++      if (__builtin_expect (initgr_resp.found == -1, 0))
+ 	{
+ 	  /* The daemon does not cache this database.  */
+ 	  __nss_not_use_nscd_group = 1;
+@@ -153,19 +159,21 @@ __nscd_getgrouplist (const char *user, g
+   if (sock != -1)
+     close_not_cancel_no_status (sock);
+  out:
+-  if (__nscd_drop_map_ref (mapped, &gc_cycle) != 0 && retval != -1)
++  if (__nscd_drop_map_ref (mapped, &gc_cycle) != 0)
+     {
+       /* When we come here this means there has been a GC cycle while we
+ 	 were looking for the data.  This means the data might have been
+ 	 inconsistent.  Retry if possible.  */
+-      if ((gc_cycle & 1) != 0)
++      if ((gc_cycle & 1) != 0 || ++nretries == 5 || retval == -1)
+ 	{
+ 	  /* nscd is just running gc now.  Disable using the mapping.  */
+-	  __nscd_unmap (mapped);
++	  if (atomic_decrement_val (&mapped->counter) == 0)
++	    __nscd_unmap (mapped);
+ 	  mapped = NO_MAPPING;
+ 	}
+ 
+-      goto retry;
++      if (retval != -1)
++	goto retry;
+     }
+ 
+   return retval;

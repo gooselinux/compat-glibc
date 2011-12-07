@@ -1,0 +1,16 @@
+2007-03-06  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/posix/getaddrinfo.c (get_scope): Correct test for
+	172.16/12 address range.
+
+--- libc/sysdeps/posix/getaddrinfo.c	9 Nov 2006 20:28:34 -0000	1.109
++++ libc/sysdeps/posix/getaddrinfo.c	6 Mar 2007 14:52:57 -0000	1.110
+@@ -1157,7 +1157,7 @@ get_scope (const struct sockaddr_storage
+ 	 169.254/16 and 127/8 are link-local.  */
+       if ((addr[0] == 169 && addr[1] == 254) || addr[0] == 127)
+ 	scope = 2;
+-      else if (addr[0] == 10 || (addr[0] == 172 && addr[1] == 16)
++      else if (addr[0] == 10 || (addr[0] == 172 && (addr[1] & 0xf0) == 16)
+ 	       || (addr[0] == 192 && addr[1] == 168))
+ 	scope = 5;
+       else

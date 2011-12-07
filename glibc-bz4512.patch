@@ -1,0 +1,178 @@
+2007-05-21  Jakub Jelinek  <jakub@redhat.com>
+
+	* tst-robust9.c (do_test): Don't fail if ENABLE_PI and
+	pthread_mutex_init failed with ENOTSUP.
+
+2007-05-17  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #4512]
+	* pthread_mutex_lock.c: Preserve FUTEX_WAITERS bit when dead owner
+	is detected.
+	* pthread_mutex_timedlock.c: Likewise.
+	* pthread_mutex_trylock.c: Likewise.
+	Patch in part by Atsushi Nemoto <anemo@mba.ocn.ne.jp>.
+
+	* Makefile (tests): Add tst-robust9 and tst-robustpi9.
+	* tst-robust9.c: New file.
+	* tst-robustpi9.c: New file.
+
+--- libc/nptl/Makefile	8 Sep 2006 10:40:49 -0000	1.188
++++ libc/nptl/Makefile	18 May 2007 00:52:02 -0000	1.189
+@@ -209,9 +209,9 @@ tests = tst-typesizes \
+ 	tst-cond14 tst-cond15 tst-cond16 tst-cond17 tst-cond18 tst-cond19 \
+ 	tst-cond20 tst-cond21 tst-cond22 \
+ 	tst-robust1 tst-robust2 tst-robust3 tst-robust4 tst-robust5 \
+-	tst-robust6 tst-robust7 tst-robust8 \
+-	tst-robustpi1 tst-robustpi2 tst-robustpi3 tst-robustpi4 \
+-	tst-robustpi5 tst-robustpi6 tst-robustpi7 tst-robustpi8 \
++	tst-robust6 tst-robust7 tst-robust8 tst-robust9 \
++	tst-robustpi1 tst-robustpi2 tst-robustpi3 tst-robustpi4 tst-robustpi5 \
++	tst-robustpi6 tst-robustpi7 tst-robustpi8 tst-robustpi9 \
+ 	tst-rwlock1 tst-rwlock2 tst-rwlock3 tst-rwlock4 tst-rwlock5 \
+ 	tst-rwlock6 tst-rwlock7 tst-rwlock8 tst-rwlock9 tst-rwlock10 \
+ 	tst-rwlock11 tst-rwlock12 tst-rwlock13 tst-rwlock14 \
+--- libc/nptl/pthread_mutex_lock.c	14 Aug 2006 23:01:26 -0000	1.15
++++ libc/nptl/pthread_mutex_lock.c	18 May 2007 00:53:33 -0000	1.16
+@@ -127,6 +127,8 @@ __pthread_mutex_lock (mutex)
+ 	      int newval = id;
+ #ifdef NO_INCR
+ 	      newval |= FUTEX_WAITERS;
++#else
++	      newval |= (oldval & FUTEX_WAITERS);
+ #endif
+ 
+ 	      newval
+--- libc/nptl/pthread_mutex_timedlock.c	14 Aug 2006 23:01:26 -0000	1.11
++++ libc/nptl/pthread_mutex_timedlock.c	18 May 2007 00:53:33 -0000	1.12
+@@ -119,9 +119,11 @@ pthread_mutex_timedlock (mutex, abstime)
+ 	  if ((oldval & FUTEX_OWNER_DIED) != 0)
+ 	    {
+ 	      /* The previous owner died.  Try locking the mutex.  */
+-	      int newval
++	      int newval = id | (oldval & FUTEX_WAITERS);
++
++	      newval
+ 		= atomic_compare_and_exchange_val_acq (&mutex->__data.__lock,
+-						       id, oldval);
++						       newval, oldval);
+ 	      if (newval != oldval)
+ 		{
+ 		  oldval = newval;
+--- libc/nptl/pthread_mutex_trylock.c	28 Apr 2007 04:23:43 -0000	1.13
++++ libc/nptl/pthread_mutex_trylock.c	18 May 2007 00:53:33 -0000	1.14
+@@ -84,9 +84,11 @@ __pthread_mutex_trylock (mutex)
+ 	  if ((oldval & FUTEX_OWNER_DIED) != 0)
+ 	    {
+ 	      /* The previous owner died.  Try locking the mutex.  */
+-	      int newval
++	      int newval = id | (oldval & FUTEX_WAITERS);
++
++	      newval
+ 		= atomic_compare_and_exchange_val_acq (&mutex->__data.__lock,
+-						       id, oldval);
++						       newval, oldval);
+ 
+ 	      if (newval != oldval)
+ 		{
+--- libc/nptl/tst-robust9.c	1 Jan 1970 00:00:00 -0000
++++ libc/nptl/tst-robust9.c	21 May 2007 22:12:40 -0000	1.2
+@@ -0,0 +1,94 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <errno.h>
++#include <pthread.h>
++#include <unistd.h>
++#include <sys/time.h>
++
++
++static pthread_mutex_t m;
++
++static void *
++tf (void *data)
++{
++  int err = pthread_mutex_lock (&m);
++  if (err == EOWNERDEAD)
++    {
++      err = pthread_mutex_consistent_np (&m);
++      if (err)
++	{
++	  puts ("pthread_mutex_consistent_np");
++	  exit (1);
++	}
++    }
++  else if (err)
++    {
++      puts ("pthread_mutex_lock");
++      exit (1);
++    }
++  printf ("thread%ld got the lock.\n", (long int) data);
++  sleep (1);
++  /* exit without unlock */
++  return NULL;
++}
++
++static int
++do_test (void)
++{
++  int err, i;
++  pthread_t t[3];
++  pthread_mutexattr_t ma;
++
++  pthread_mutexattr_init (&ma);
++  err = pthread_mutexattr_setrobust_np (&ma, PTHREAD_MUTEX_ROBUST_NP);
++  if (err)
++    {
++      puts ("pthread_mutexattr_setrobust_np");
++      return 1;
++    }
++#ifdef ENABLE_PI
++  if (pthread_mutexattr_setprotocol (&ma, PTHREAD_PRIO_INHERIT) != 0)
++    {
++      puts ("pthread_mutexattr_setprotocol failed");
++      return 1;
++    }
++#endif
++  err = pthread_mutex_init (&m, &ma);
++#ifdef ENABLE_PI
++  if (err == ENOTSUP)
++    {
++      puts ("PI robust mutexes not supported");
++      return 0;
++    }
++#endif
++  if (err)
++    {
++      puts ("pthread_mutex_init");
++      return 1;
++    }
++
++  for (i = 0; i < sizeof (t) / sizeof (t[0]); i++)
++    {
++      err = pthread_create (&t[i], NULL, tf, (void *) (long int) i);
++      if (err)
++	{
++	  puts ("pthread_create");
++	  return 1;
++	}
++    }
++
++  for (i = 0; i < sizeof (t) / sizeof (t[0]); i++)
++    {
++      err = pthread_join (t[i], NULL);
++      if (err)
++	{
++	  puts ("pthread_join");
++	  return 1;
++	}
++    }
++  return 0;
++}
++
++#define TIMEOUT 5
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/nptl/tst-robustpi9.c	1 Jan 1970 00:00:00 -0000
++++ libc/nptl/tst-robustpi9.c	19 May 2007 08:21:27 -0000	1.1
+@@ -0,0 +1,2 @@
++#define ENABLE_PI 1
++#include "tst-robust9.c"

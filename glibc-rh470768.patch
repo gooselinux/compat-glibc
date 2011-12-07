@@ -1,0 +1,23 @@
+2008-10-30  Ulrich Drepper  <drepper@redhat.com>
+
+	* grp/initgroups.c (internal_getgrouplist): Don't prematurely
+	abort if there is no initgroups_dyn function.
+
+--- libc/grp/initgroups.c	3 Aug 2006 15:39:47 -0000	1.37
++++ libc/grp/initgroups.c	30 Oct 2008 16:55:10 -0000	1.38
+@@ -94,13 +94,8 @@ internal_getgrouplist (const char *user,
+       fct = __nss_lookup_function (nip, "initgroups_dyn");
+ 
+       if (fct == NULL)
+-	{
+-	  status = compat_call (nip, user, group, &start, size, groupsp,
+-				limit, &errno);
+-
+-	  if (nss_next_action (nip, NSS_STATUS_UNAVAIL) != NSS_ACTION_CONTINUE)
+-	    break;
+-	}
++	status = compat_call (nip, user, group, &start, size, groupsp,
++			      limit, &errno);
+       else
+ 	status = DL_CALL_FCT (fct, (user, group, &start, size, groupsp,
+ 				    limit, &errno));

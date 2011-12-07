@@ -1,0 +1,20 @@
+2007-10-01  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #5071]
+	* malloc/malloc.c (mremap_chunk): Avoid resizing of new block has
+	the same number of pages.
+	Patch by Tomash Brechko <tomash.brechko@gmail.com>.
+
+--- libc/malloc/malloc.c	21 May 2007 16:12:53 -0000	1.180
++++ libc/malloc/malloc.c	2 Oct 2007 03:52:03 -0000	1.181
+@@ -3503,6 +3503,10 @@ mremap_chunk(p, new_size) mchunkptr p; s
+   /* Note the extra SIZE_SZ overhead as in mmap_chunk(). */
+   new_size = (new_size + offset + SIZE_SZ + page_mask) & ~page_mask;
+ 
++  /* No need to remap if the number of pages does not change.  */
++  if (size + offset == new_size)
++    return p;
++
+   cp = (char *)mremap((char *)p - offset, size + offset, new_size,
+                       MREMAP_MAYMOVE);
+ 

@@ -1,0 +1,24 @@
+2007-04-25  Jakub Jelinek  <jakub@redhat.com>
+
+	* libio/bits/stdio.h (fgetc_unlocked): Add extern inline optimized
+	version.
+
+--- libc/libio/bits/stdio.h	17 Mar 2007 17:04:08 -0000	1.13
++++ libc/libio/bits/stdio.h	25 Apr 2007 14:35:54 -0000	1.14
+@@ -44,6 +44,16 @@ getchar (void)
+ }
+ 
+ 
++# ifdef __USE_MISC
++/* Faster version when locking is not necessary.  */
++__STDIO_INLINE int
++fgetc_unlocked (FILE *__fp)
++{
++  return _IO_getc_unlocked (__fp);
++}
++# endif /* misc */
++
++
+ # if defined __USE_POSIX || defined __USE_MISC
+ /* This is defined in POSIX.1:1996.  */
+ __STDIO_INLINE int

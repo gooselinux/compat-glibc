@@ -1,0 +1,46 @@
+2008-04-30  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/unix/sysv/linux/bits/resource.h: Define RUSAGE_THREAD and
+	RUSAGE_LWP.
+	* sysdeps/unix/sysv/linux/sparc/bits/resource.h: Likewise.
+
+--- libc/sysdeps/unix/sysv/linux/bits/resource.h	21 Jun 2005 18:38:46 -0000	1.19
++++ libc/sysdeps/unix/sysv/linux/bits/resource.h	1 May 2008 05:37:45 -0000	1.20
+@@ -158,8 +158,16 @@ enum __rusage_who
+ #define RUSAGE_SELF RUSAGE_SELF
+ 
+   /* All of its terminated child processes.  */
+-  RUSAGE_CHILDREN = -1
++  RUSAGE_CHILDREN = -1,
+ #define RUSAGE_CHILDREN RUSAGE_CHILDREN
++
++#ifdef __USE_GNU
++  /* The calling thread.  */
++  RUSAGE_THREAD = 1
++# define RUSAGE_THREAD RUSAGE_THREAD
++  /* Name for the same functionality on Solaris.  */
++# define RUSAGE_LWP RUSAGE_THREAD
++#endif
+ };
+ 
+ #define __need_timeval
+--- libc/sysdeps/unix/sysv/linux/sparc/bits/resource.h	21 Jun 2005 18:38:50 -0000	1.9
++++ libc/sysdeps/unix/sysv/linux/sparc/bits/resource.h	1 May 2008 05:37:45 -0000	1.10
+@@ -174,8 +174,16 @@ enum __rusage_who
+ #define RUSAGE_SELF RUSAGE_SELF
+ 
+   /* All of its terminated child processes.  */
+-  RUSAGE_CHILDREN = -1
++  RUSAGE_CHILDREN = -1,
+ #define RUSAGE_CHILDREN RUSAGE_CHILDREN
++
++#ifdef __USE_GNU
++  /* The calling thread.  */
++  RUSAGE_THREAD = 1
++# define RUSAGE_THREAD RUSAGE_THREAD
++  /* Name for the same functionality on Solaris.  */
++# define RUSAGE_LWP RUSAGE_THREAD
++#endif
+ };
+ 
+ #define __need_timeval

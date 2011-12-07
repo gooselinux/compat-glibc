@@ -1,0 +1,27 @@
+2008-09-22  Deborah S. Townsend  <dstownse@us.ibm.com>
+
+	* sysdeps/s390/s390-64/s390x-mcount.S: Replace ahi with aghi.
+	* sysdeps/unix/sysv/linux/s390/s390-64/socket.S: Likewise.
+
+--- libc/sysdeps/s390/s390-64/s390x-mcount.S	26 May 2005 14:30:45 -0000	1.3
++++ libc/sysdeps/s390/s390-64/s390x-mcount.S	23 Sep 2008 17:17:30 -0000	1.4
+@@ -64,7 +64,7 @@ C_LABEL(_mcount)
+ 	/* Pop the saved registers.  Please note that `mcount' has no
+ 	   return value.  */
+ 	lmg   %r14,%r5,160(%r15)
+-        ahi   %r15,224
++        aghi   %r15,224
+         br    %r14
+ 	ASM_SIZE_DIRECTIVE(C_SYMBOL_NAME(_mcount))
+ 
+--- libc/sysdeps/unix/sysv/linux/s390/s390-64/socket.S	20 Dec 2005 06:55:02 -0000	1.7
++++ libc/sysdeps/unix/sysv/linux/s390/s390-64/socket.S	23 Sep 2008 17:17:30 -0000	1.8
+@@ -61,7 +61,7 @@ ENTRY(__socket)
+ 	cfi_offset (%r6,-112)
+         lgr     %r1,%r15
+         lg      %r0,8(%r15)             /* Load eos.  */
+-        ahi     %r15,-208               /* Buy stack space.  */
++        aghi     %r15,-208              /* Buy stack space.  */
+ 	cfi_adjust_cfa_offset (208)
+         stg     %r1,0(%r15)             /* Store back chain.  */
+         stg     %r0,8(%r15)             /* Store eos.  */

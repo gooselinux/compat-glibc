@@ -1,0 +1,41 @@
+2007-08-29  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/unix/sysv/linux/check_pf.c (IFA_F_OPTIMISTIC): Define to
+	zero if not defined.
+	(make_request): Recognize optimistic addresses and treat them like
+	deprecated addresses.
+	Reported by Neil Horman <nhorman@redhat.com>.
+
+--- libc/sysdeps/unix/sysv/linux/check_pf.c	16 Jun 2007 16:54:40 -0000	1.11
++++ libc/sysdeps/unix/sysv/linux/check_pf.c	29 Aug 2007 16:49:45 -0000	1.12
+@@ -41,6 +41,9 @@
+ #ifndef IFA_F_HOMEADDRESS
+ # define IFA_F_HOMEADDRESS 0
+ #endif
++#ifndef IFA_F_OPTIMISTIC
++# define IFA_F_OPTIMISTIC 4
++#endif
+ 
+ 
+ static int
+@@ -150,7 +153,8 @@ make_request (int fd, pid_t pid, bool *s
+ 
+ 		  if (ifam->ifa_flags & (IFA_F_DEPRECATED
+ 					 | IFA_F_TEMPORARY
+-					 | IFA_F_HOMEADDRESS))
++					 | IFA_F_HOMEADDRESS
++					 | IFA_F_OPTIMISTIC))
+ 		    {
+ 		      struct rtattr *rta = IFA_RTA (ifam);
+ 		      size_t len = (nlmh->nlmsg_len
+@@ -174,7 +178,9 @@ make_request (int fd, pid_t pid, bool *s
+ 			}
+ 
+ 		      struct in6ailist *newp = alloca (sizeof (*newp));
+-		      newp->info.flags = (((ifam->ifa_flags & IFA_F_DEPRECATED)
++		      newp->info.flags = (((ifam->ifa_flags
++					    & (IFA_F_DEPRECATED
++					       | IFA_F_OPTIMISTIC))
+ 					   ? in6ai_deprecated : 0)
+ 					  | ((ifam->ifa_flags
+ 					      & IFA_F_TEMPORARY)

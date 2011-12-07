@@ -1,0 +1,148 @@
+2007-03-15  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #4101]
+	* argp/argp-help.c (hol_cluster_cmp): Fix comparisons used to find
+	ancestors with the same depths.
+	Patch by Niels Moeller <nisse@lysator.liu.se>.
+	(filter_doc): Don't crash if argp is NULL.
+	* argp/Makefile (tests): Add tst-argp2.
+	* argp/tst-argp2.c: New test.
+
+--- libc/argp/Makefile	9 May 2006 22:42:24 -0000	1.7
++++ libc/argp/Makefile	15 Mar 2007 20:08:57 -0000	1.8
+@@ -26,7 +26,7 @@ distribute	= argp-fmtstream.h argp-namef
+ routines	= $(addprefix argp-, ba fmtstream fs-xinl help parse pv \
+ 				     pvh xinl eexst)
+ 
+-tests		= argp-test tst-argp1 bug-argp1
++tests		= argp-test tst-argp1 bug-argp1 tst-argp2
+ 
+ CFLAGS-argp-help.c = $(uses-callbacks) -fexceptions
+ CFLAGS-argp-parse.c = $(uses-callbacks)
+--- libc/argp/argp-help.c	10 May 2006 06:28:06 -0000	1.54
++++ libc/argp/argp-help.c	15 Mar 2007 20:08:18 -0000	1.55
+@@ -672,9 +673,9 @@ hol_cluster_cmp (const struct hol_cluste
+ {
+   /* If one cluster is deeper than the other, use its ancestor at the same
+      level, so that finding the common ancestor is straightforward.  */
+-  while (cl1->depth < cl2->depth)
++  while (cl1->depth > cl2->depth)
+     cl1 = cl1->parent;
+-  while (cl2->depth < cl1->depth)
++  while (cl2->depth > cl1->depth)
+     cl2 = cl2->parent;
+ 
+   /* Now reduce both clusters to their ancestors at the point where both have
+@@ -987,7 +988,7 @@ static const char *
+ filter_doc (const char *doc, int key, const struct argp *argp,
+ 	    const struct argp_state *state)
+ {
+-  if (argp->help_filter)
++  if (argp && argp->help_filter)
+     /* We must apply a user filter to this output.  */
+     {
+       void *input = __argp_input (argp, state);
+--- libc/argp/tst-argp2.c	1 Jan 1970 00:00:00 -0000
++++ libc/argp/tst-argp2.c	15 Mar 2007 20:08:46 -0000	1.1
+@@ -0,0 +1,101 @@
++/* Copyright (C) 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Jakub Jelinek <jakub@redhat.com>, 2007.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <argp.h>
++
++static const struct argp_option opt1[] =
++  {
++    { "opt1", '1', "NUMBER", 0, "Option 1" },
++    { NULL, 0, NULL, 0, NULL }
++  };
++
++static const struct argp_option opt2[] =
++  {
++    { "opt2", '2', "NUMBER", 0, "Option 2" },
++    { NULL, 0, NULL, 0, NULL }
++  };
++
++static const struct argp_option opt3[] =
++  {
++    { "opt3", '3', "NUMBER", 0, "Option 3" },
++    { NULL, 0, NULL, 0, NULL }
++  };
++
++static const struct argp_option opt4[] =
++  {
++    { "opt4", '4', "NUMBER", 0, "Option 4" },
++    { NULL, 0, NULL, 0, NULL }
++  };
++
++static const struct argp_option opt5[] =
++  {
++    { "opt5", '5', "NUMBER", 0, "Option 5" },
++    { NULL, 0, NULL, 0, NULL }
++  };
++
++static struct argp argp5 =
++  {
++    opt5, NULL, "args doc5", "doc5", NULL, NULL, NULL
++  };
++
++static struct argp argp4 =
++  {
++    opt4, NULL, "args doc4", "doc4", NULL, NULL, NULL
++  };
++
++static struct argp argp3 =
++  {
++    opt3, NULL, "args doc3", "doc3", NULL, NULL, NULL
++  };
++
++static struct argp_child children2[] =
++  {
++    { &argp4, 0, "child3", 3 },
++    { &argp5, 0, "child4", 4 },
++    { NULL, 0, NULL, 0 }
++  };
++
++static struct argp argp2 =
++  {
++    opt2, NULL, "args doc2", "doc2", children2, NULL, NULL
++  };
++
++static struct argp_child children1[] =
++  {
++    { &argp2, 0, "child1", 1 },
++    { &argp3, 0, "child2", 2 },
++    { NULL, 0, NULL, 0 }
++  };
++
++static struct argp argp1 =
++  {
++    opt1, NULL, "args doc1", "doc1", children1, NULL, NULL
++  };
++
++
++static int
++do_test (void)
++{
++  argp_help (&argp1, stdout, ARGP_HELP_LONG, (char *) "tst-argp2");
++  return 0;
++}
++
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"

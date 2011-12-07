@@ -1,0 +1,10 @@
+--- libc/fedora/glibc_post_upgrade.c	25 Aug 2007 19:15:32 -0000	1.1.2.10
++++ libc/fedora/glibc_post_upgrade.c	28 Mar 2008 14:05:57 -0000	1.1.2.11
+@@ -182,6 +182,7 @@ main (void)
+   /* Check if we can safely condrestart sshd.  */
+   if (access ("/sbin/service", X_OK) == 0
+       && access ("/usr/sbin/sshd", X_OK) == 0
++      && access ("/etc/rc.d/init.d/sshd", X_OK) == 0
+       && access ("/bin/bash", X_OK) == 0)
+     {
+       if (check_elf ("/usr/sbin/sshd"))

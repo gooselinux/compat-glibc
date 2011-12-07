@@ -1,0 +1,60 @@
+2006-12-14  Jakub Jelinek  <jakub@redhat.com>
+
+	* misc/tst-pselect.c (do_test): Fix sigblock argument.
+
+2006-12-14  Ulrich Drepper  <drepper@redhat.com>
+
+	* misc/tst-pselect.c (do_test): Make sure the helper process is
+	terminating when the test is aborted.
+
+--- libc/misc/tst-pselect.c	21 Jan 2006 19:58:31 -0000	1.2
++++ libc/misc/tst-pselect.c	14 Dec 2006 20:03:47 -0000	1.4
+@@ -29,7 +29,16 @@ do_test (void)
+       return 1;
+     }
+ 
+-  if (sigblock (SIGUSR1) != 0)
++  sa.sa_handler = SIG_IGN;
++  sa.sa_flags = SA_NOCLDWAIT;
++
++  if (sigaction (SIGCHLD, &sa, NULL) != 0)
++    {
++      puts ("2nd sigaction failed");
++      return 1;
++    }
++
++  if (sigblock (sigmask (SIGUSR1)) != 0)
+     {
+       puts ("sigblock failed");
+       return 1;
+@@ -52,6 +61,7 @@ do_test (void)
+ 
+   struct timespec to = { .tv_sec = 0, .tv_nsec = 500000000 };
+ 
++  pid_t parent = getpid ();
+   pid_t p = fork ();
+   if (p == 0)
+     {
+@@ -63,6 +73,9 @@ do_test (void)
+       int e;
+       do
+ 	{
++	  if (getppid () != parent)
++	    exit (2);
++
+ 	  errno = 0;
+ 	  e = pselect (fds[0][0] + 1, &rfds, NULL, NULL, &to, &ss);
+ 	}
+@@ -108,12 +121,6 @@ do_test (void)
+       return 1;
+     }
+ 
+-  if (TEMP_FAILURE_RETRY (waitpid (p, NULL, 0)) != p)
+-    {
+-      puts ("waitpid failed");
+-      return 1;
+-    }
+-
+   return 0;
+ }
+ 

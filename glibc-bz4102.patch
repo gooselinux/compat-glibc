@@ -1,0 +1,19 @@
+2007-04-28  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #4102]
+	* sysdeps/posix/getaddrinfo.c (default_labels): Assign separate
+	label to Teredo tunnel addresses 2001://32.
+
+--- libc/sysdeps/posix/getaddrinfo.c	18 Apr 2007 23:46:13 -0000	1.112
++++ libc/sysdeps/posix/getaddrinfo.c	28 Apr 2007 16:09:07 -0000	1.113
+@@ -1095,6 +1099,10 @@ static const struct prefixentry default_
+ 			  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } } },
+       7, 6 },
+     { { .in6_u
++	= { .u6_addr8 = { 0x20, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } } },
++      32, 7 },
++    { { .in6_u
+ 	= { .u6_addr8 = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+ 			  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } } },
+       0, 1 }

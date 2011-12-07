@@ -1,0 +1,22 @@
+2007-02-25  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/unix/sysv/linux/fork.c (__libc_fork): Reset refcntr in
+	new thread, don't just decrement it.
+	Patch by Suzuki K P <suzuki@in.ibm.com>.
+
+--- libc/nptl/sysdeps/unix/sysv/linux/fork.c	20 Dec 2003 23:37:13 -0000	1.11
++++ libc/nptl/sysdeps/unix/sysv/linux/fork.c	25 Feb 2007 21:43:28 -0000	1.12
+@@ -167,8 +167,11 @@ __libc_fork (void)
+ 	    allp->handler->child_handler ();
+ 
+ 	  /* Note that we do not have to wake any possible waiter.
+-	     This is the only thread in the new process.  */
+-	  --allp->handler->refcntr;
++ 	     This is the only thread in the new process.  The count
++ 	     may have been bumped up by other threads doing a fork.
++ 	     We reset it to 1, to avoid waiting for non-existing
++ 	     thread(s) to release the count.  */
++	  allp->handler->refcntr = 1;
+ 
+ 	  /* XXX We could at this point look through the object pool
+ 	     and mark all objects not on the __fork_handlers list as

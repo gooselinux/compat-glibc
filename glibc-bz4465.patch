@@ -1,0 +1,104 @@
+2007-05-06  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #4465]
+	* posix/unistd.h: Remove __THROW from fdatasync.
+
+2007-05-06  Mike Frysinger  <vapier@gentoo.org>
+
+	[BZ #4465]
+	* sysdeps/unix/sysv/linux/syscalls.list (fdatasync): Add "C" to args.
+
+	[BZ #4465]
+	* tst-cancel-wrappers.sh: Set C["fdatasync"] to 1.
+	* tst-cancel4.c (tf_fdatasync): New test.
+
+--- libc/posix/unistd.h	16 Apr 2007 23:44:06 -0000	1.149
++++ libc/posix/unistd.h	7 May 2007 04:21:34 -0000	1.150
+@@ -1062,7 +1062,7 @@ extern int lockf64 (int __fd, int __cmd,
+ #if defined __USE_POSIX199309 || defined __USE_UNIX98
+ /* Synchronize at least the data part of a file with the underlying
+    media.  */
+-extern int fdatasync (int __fildes) __THROW;
++extern int fdatasync (int __fildes);
+ #endif /* Use POSIX199309 */
+ 
+ 
+--- libc/sysdeps/unix/sysv/linux/syscalls.list	21 Feb 2007 19:02:17 -0000	1.129
++++ libc/sysdeps/unix/sysv/linux/syscalls.list	7 May 2007 03:58:18 -0000	1.130
+@@ -10,7 +10,7 @@ delete_module	EXTRA	delete_module	3	dele
+ epoll_create	EXTRA	epoll_create	i:i	epoll_create
+ epoll_ctl	EXTRA	epoll_ctl	i:iiip	epoll_ctl
+ epoll_wait	EXTRA	epoll_wait	Ci:ipii	epoll_wait
+-fdatasync	-	fdatasync	i:i	fdatasync
++fdatasync	-	fdatasync	Ci:i	fdatasync
+ flock		-	flock		i:ii	__flock		flock
+ fork		-	fork		i:	__libc_fork	__fork fork
+ get_kernel_syms	EXTRA	get_kernel_syms	i:p	get_kernel_syms
+--- libc/nptl/tst-cancel-wrappers.sh	20 Jul 2003 08:35:45 -0000	1.7
++++ libc/nptl/tst-cancel-wrappers.sh	7 May 2007 04:22:20 -0000	1.8
+@@ -26,6 +26,7 @@ C["close"]=1
+ C["connect"]=1
+ C["creat"]=1
+ C["fcntl"]=1
++C["fdatasync"]=1
+ C["fsync"]=1
+ C["msgrcv"]=1
+ C["msgsnd"]=1
+--- libc/nptl/tst-cancel4.c	20 Jan 2006 06:59:03 -0000	1.20
++++ libc/nptl/tst-cancel4.c	7 May 2007 04:22:03 -0000	1.21
+@@ -1571,6 +1571,47 @@ tf_fsync (void *arg)
+ 
+ 
+ static void *
++tf_fdatasync (void *arg)
++{
++  if (arg == NULL)
++    // XXX If somebody can provide a portable test case in which fdatasync()
++    // blocks we can enable this test to run in both rounds.
++    abort ();
++
++  tempfd = open ("Makefile", O_RDONLY);
++  if (tempfd == -1)
++    {
++      printf ("%s: cannot open Makefile\n", __FUNCTION__);
++      exit (1);
++    }
++
++  int r = pthread_barrier_wait (&b2);
++  if (r != 0 && r != PTHREAD_BARRIER_SERIAL_THREAD)
++    {
++      printf ("%s: barrier_wait failed\n", __FUNCTION__);
++      exit (1);
++    }
++
++  r = pthread_barrier_wait (&b2);
++  if (r != 0 && r != PTHREAD_BARRIER_SERIAL_THREAD)
++    {
++      printf ("%s: 2nd barrier_wait failed\n", __FUNCTION__);
++      exit (1);
++    }
++
++  pthread_cleanup_push (cl, NULL);
++
++  fdatasync (tempfd);
++
++  pthread_cleanup_pop (0);
++
++  printf ("%s: fdatasync returned\n", __FUNCTION__);
++
++  exit (1);
++}
++
++
++static void *
+ tf_msync (void *arg)
+ {
+   if (arg == NULL)
+@@ -2078,6 +2119,7 @@ static struct
+   ADD_TEST (pread, 2, 1),
+   ADD_TEST (pwrite, 2, 1),
+   ADD_TEST (fsync, 2, 1),
++  ADD_TEST (fdatasync, 2, 1),
+   ADD_TEST (msync, 2, 1),
+   ADD_TEST (sendto, 2, 1),
+   ADD_TEST (sendmsg, 2, 1),

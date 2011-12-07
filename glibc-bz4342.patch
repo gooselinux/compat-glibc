@@ -1,0 +1,32 @@
+2007-04-27  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #4342]
+	* stdio-common/vfscanf.c (_IO_vfscanf_internal): Allow
+	hexa-decimal floats without exponent.
+	* stdio-common/tstscanf.c (main): Adjust Test 8 test for success.
+
+--- libc/stdio-common/vfscanf.c	19 Feb 2007 22:27:52 -0000	1.122
++++ libc/stdio-common/vfscanf.c	27 Apr 2007 19:28:32 -0000	1.123
+@@ -1888,9 +1888,8 @@ _IO_vfscanf_internal (_IO_FILE *s, const
+ 
+ 	  /* Have we read any character?  If we try to read a number
+ 	     in hexadecimal notation and we have read only the `0x'
+-	     prefix or no exponent this is an error.  */
+-	  if (__builtin_expect (wpsize == 0
+-				|| (is_hexa && (wpsize == 2 || ! got_e)), 0))
++	     prefix this is an error.  */
++	  if (__builtin_expect (wpsize == 0 || (is_hexa && wpsize == 2), 0))
+ 	    conv_error ();
+ 
+ 	scan_float:
+--- libc/stdio-common/tstscanf.c	7 Aug 2001 04:33:13 -0000	1.21
++++ libc/stdio-common/tstscanf.c	27 Apr 2007 19:28:49 -0000	1.22
+@@ -272,7 +272,7 @@ main (int argc, char **argv)
+     res = sscanf ("0x1234", "%lf", &d);
+     printf ("res = %d, d = %f\n", res, d);
+ 
+-    if (res != 0 || d != 123456.789)
++    if (res != 1 || d != 4660)
+       {
+ 	fputs ("test failed!\n", stdout);
+ 	result = 1;

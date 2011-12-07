@@ -1,0 +1,27 @@
+2007-05-29  Ulrich Drepper  <drepper@redhat.com>
+
+	* nscd/nscd_helper.c (get_mapping): Handle short replies instead
+	of crashing.  When this is the case or if the reply is malformed,
+	don't try to close the new file descriptor since it does not
+	exist.
+	Patch in part by Guillaume Chazarain <guichaz@yahoo.fr>.
+
+--- libc/nscd/nscd_helper.c	16 Feb 2007 06:34:19 -0000	1.22
++++ libc/nscd/nscd_helper.c	29 May 2007 15:04:02 -0000	1.24
+@@ -269,11 +269,12 @@ get_mapping (request_type type, const ch
+ 			!= keylen, 0))
+     goto out_close2;
+ 
+-  mapfd = *(int *) CMSG_DATA (cmsg);
++  if (__builtin_expect (CMSG_FIRSTHDR (&msg) == NULL
++			|| (CMSG_FIRSTHDR (&msg)->cmsg_len
++			    != CMSG_LEN (sizeof (int))), 0))
++    goto out_close2;
+ 
+-  if (__builtin_expect (CMSG_FIRSTHDR (&msg)->cmsg_len
+-			!= CMSG_LEN (sizeof (int)), 0))
+-    goto out_close;
++  mapfd = *(int *) CMSG_DATA (cmsg);
+ 
+   struct stat64 st;
+   if (__builtin_expect (strcmp (resdata, key) != 0, 0)

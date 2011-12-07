@@ -1,0 +1,42 @@
+diff -up glibc-2.5-20061008T1257/nptl/sysdeps/unix/sysv/linux/i386/i486/sem_timedwait.S.nwaiters_patch glibc-2.5-20061008T1257/nptl/sysdeps/unix/sysv/linux/i386/i486/sem_timedwait.S
+--- glibc-2.5-20061008T1257/nptl/sysdeps/unix/sysv/linux/i386/i486/sem_timedwait.S.nwaiters_patch	2009-10-21 00:41:09.860259319 +0200
++++ glibc-2.5-20061008T1257/nptl/sysdeps/unix/sysv/linux/i386/i486/sem_timedwait.S	2009-10-21 00:41:40.188168489 +0200
+@@ -62,14 +62,14 @@ sem_timedwait:
+ 
+ 	movl	32(%esp), %edi
+ 
++	LOCK
++	incl    NWAITERS(%ecx)
++
+ 	/* Check for invalid nanosecond field.  */
+ 	cmpl	$1000000000, 4(%edi)
+ 	movl	$EINVAL, %esi
+ 	jae	6f
+ 
+-	LOCK
+-	incl	NWAITERS(%ecx)
+-
+ 7:	xorl	%ecx, %ecx
+ 	movl	%esp, %ebx
+ 	movl	%ecx, %edx
+diff -up glibc-2.5-20061008T1257/nptl/sysdeps/unix/sysv/linux/x86_64/sem_timedwait.S.nwaiters_patch glibc-2.5-20061008T1257/nptl/sysdeps/unix/sysv/linux/x86_64/sem_timedwait.S
+--- glibc-2.5-20061008T1257/nptl/sysdeps/unix/sysv/linux/x86_64/sem_timedwait.S.nwaiters_patch	2009-10-21 00:39:56.835267304 +0200
++++ glibc-2.5-20061008T1257/nptl/sysdeps/unix/sysv/linux/x86_64/sem_timedwait.S	2009-10-21 00:40:30.420164805 +0200
+@@ -67,14 +67,14 @@ sem_timedwait:
+ 	movq	%rdi, %r12
+ 	movq	%rsi, %r13
+ 
++	LOCK
++	addq    $1, NWAITERS(%r12)
++
+ 	/* Check for invalid nanosecond field.  */
+ 	cmpq	$1000000000, 8(%r13)
+ 	movl	$EINVAL, %r14d
+ 	jae	6f
+ 
+-	LOCK
+-	addq	$1, NWAITERS(%r12)
+-
+ 7:	xorl	%esi, %esi
+ 	movq	%rsp, %rdi
+ 	movq	$VSYSCALL_ADDR_vgettimeofday, %rax

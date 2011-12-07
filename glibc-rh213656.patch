@@ -1,0 +1,18 @@
+2006-11-02  Jakub Jelinek  <jakub@redhat.com>
+
+	* malloc/memusage.c (dest): Reset not_me back to false after
+	printing statistics.
+
+--- libc/malloc/memusage.c	11 Oct 2006 08:59:28 -0000	1.15
++++ libc/malloc/memusage.c	3 Nov 2006 17:00:19 -0000	1.16
+@@ -887,4 +887,10 @@ dest (void)
+         fputc ('=', stderr);
+       fputs ("\e[0;0m\n", stderr);
+     }
++
++  /* Any following malloc/free etc. calls should generate statistics again,
++     because otherwise freeing something that has been malloced before
++     this destructor (including struct header in front of it) wouldn't
++     be properly freed.  */
++  not_me = false;
+ }

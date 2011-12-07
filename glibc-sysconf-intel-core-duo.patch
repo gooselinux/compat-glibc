@@ -1,0 +1,123 @@
+2006-11-09  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/unix/sysv/linux/x86_64/sysconf.c (intel_check_word): Add
+	noinline attribute.
+
+2006-11-10  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/unix/sysv/linux/i386/sysconf.c (intel_check_word): Add
+	noinline attribute.
+
+2006-11-05  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/unix/sysv/linux/i386/sysconf.c (intel_check_word):
+	Update handling of cache descriptor 0x49 for new models.
+	* sysdeps/unix/sysv/linux/x86_64/sysconf.c (intel_check_word):
+	Likewise.
+
+--- libc/sysdeps/unix/sysv/linux/i386/sysconf.c	6 Mar 2006 08:25:57 -0000	1.7
++++ libc/sysdeps/unix/sysv/linux/i386/sysconf.c	10 Nov 2006 07:30:31 -0000	1.9
+@@ -97,7 +97,7 @@ static const struct intel_02_cache_info
+     { 0x45, _SC_LEVEL2_CACHE_SIZE, 2097152, 4, 32 },
+     { 0x46, _SC_LEVEL3_CACHE_SIZE, 4194304, 4, 64 },
+     { 0x47, _SC_LEVEL3_CACHE_SIZE, 8388608, 8, 64 },
+-    { 0x49, _SC_LEVEL3_CACHE_SIZE, 4194304, 16, 64 },
++    { 0x49, _SC_LEVEL2_CACHE_SIZE, 4194304, 16, 64 },
+     { 0x4a, _SC_LEVEL3_CACHE_SIZE, 6291456, 12, 64 },
+     { 0x4b, _SC_LEVEL3_CACHE_SIZE, 8388608, 16, 64 },
+     { 0x4c, _SC_LEVEL3_CACHE_SIZE, 12582912, 12, 64 },
+@@ -140,6 +140,7 @@ intel_02_known_compare (const void *p1, 
+ 
+ 
+ static long int
++__attribute__ ((noinline))
+ intel_check_word (int name, unsigned int value, bool *has_level_2,
+ 		  bool *no_level_2_or_3)
+ {
+@@ -166,6 +167,33 @@ intel_check_word (int name, unsigned int
+ 	}
+       else
+ 	{
++	  if (byte == 0x49 && folded_name == _SC_LEVEL3_CACHE_SIZE)
++	    {
++	      /* Intel reused this value.  For family 15, model 6 it
++		 specifies the 3rd level cache.  Otherwise the 2nd
++		 level cache.  */
++	      unsigned int eax;
++	      unsigned int ebx;
++	      unsigned int ecx;
++	      unsigned int edx;
++	      asm volatile ("xchgl %%ebx, %1; cpuid; xchgl %%ebx, %1"
++			    : "=a" (eax), "=r" (ebx), "=c" (ecx), "=d" (edx)
++			    : "0" (1));
++
++	      unsigned int family = ((eax >> 20) & 0xff) + ((eax >> 8) & 0xf);
++	      unsigned int model = ((((eax >>16) & 0xf) << 4)
++				    + ((eax >> 4) & 0xf));
++	      if (family == 15 && model == 6)
++		{
++		  /* The level 3 cache is encoded for this model like
++		     the level 2 cache is for other models.  Pretend
++		     the caller asked for the level 2 cache.  */
++		  name = (_SC_LEVEL2_CACHE_SIZE
++			  + (name - _SC_LEVEL3_CACHE_SIZE));
++		  folded_name = _SC_LEVEL3_CACHE_SIZE;
++		}
++	    }
++
+ 	  struct intel_02_cache_info *found;
+ 	  struct intel_02_cache_info search;
+ 
+--- libc/sysdeps/unix/sysv/linux/x86_64/sysconf.c	6 Mar 2006 08:25:57 -0000	1.5
++++ libc/sysdeps/unix/sysv/linux/x86_64/sysconf.c	10 Nov 2006 07:31:55 -0000	1.7
+@@ -58,7 +58,7 @@ static const struct intel_02_cache_info
+     { 0x45, _SC_LEVEL2_CACHE_SIZE, 2097152, 4, 32 },
+     { 0x46, _SC_LEVEL3_CACHE_SIZE, 4194304, 4, 64 },
+     { 0x47, _SC_LEVEL3_CACHE_SIZE, 8388608, 8, 64 },
+-    { 0x49, _SC_LEVEL3_CACHE_SIZE, 4194304, 16, 64 },
++    { 0x49, _SC_LEVEL2_CACHE_SIZE, 4194304, 16, 64 },
+     { 0x4a, _SC_LEVEL3_CACHE_SIZE, 6291456, 12, 64 },
+     { 0x4b, _SC_LEVEL3_CACHE_SIZE, 8388608, 16, 64 },
+     { 0x4c, _SC_LEVEL3_CACHE_SIZE, 12582912, 12, 64 },
+@@ -101,6 +101,7 @@ intel_02_known_compare (const void *p1, 
+ 
+ 
+ static long int
++__attribute__ ((noinline))
+ intel_check_word (int name, unsigned int value, bool *has_level_2,
+ 		  bool *no_level_2_or_3)
+ {
+@@ -127,6 +128,33 @@ intel_check_word (int name, unsigned int
+ 	}
+       else
+ 	{
++	  if (byte == 0x49 && folded_name == _SC_LEVEL3_CACHE_SIZE)
++	    {
++	      /* Intel reused this value.  For family 15, model 6 it
++		 specifies the 3rd level cache.  Otherwise the 2nd
++		 level cache.  */
++	      unsigned int eax;
++	      unsigned int ebx;
++	      unsigned int ecx;
++	      unsigned int edx;
++	      asm volatile ("xchgl %%ebx, %1; cpuid; xchgl %%ebx, %1"
++			    : "=a" (eax), "=r" (ebx), "=c" (ecx), "=d" (edx)
++			    : "0" (1));
++
++	      unsigned int family = ((eax >> 20) & 0xff) + ((eax >> 8) & 0xf);
++	      unsigned int model = ((((eax >>16) & 0xf) << 4)
++				    + ((eax >> 4) & 0xf));
++	      if (family == 15 && model == 6)
++		{
++		  /* The level 3 cache is encoded for this model like
++		     the level 2 cache is for other models.  Pretend
++		     the caller asked for the level 2 cache.  */
++		  name = (_SC_LEVEL2_CACHE_SIZE
++			  + (name - _SC_LEVEL3_CACHE_SIZE));
++		  folded_name = _SC_LEVEL3_CACHE_SIZE;
++		}
++	    }
++
+ 	  struct intel_02_cache_info *found;
+ 	  struct intel_02_cache_info search;
+ 

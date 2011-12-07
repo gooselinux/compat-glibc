@@ -1,0 +1,20 @@
+2007-05-10  Ulrich Drepper  <drepper@redhat.com>
+
+	* include/sys/cdefs.h: Redefine __nonnull so that test for
+	incorrect parameters in the libc code itself are not omitted.
+
+--- libc/include/sys/cdefs.h	18 Oct 2004 04:17:15 -0000	1.2
++++ libc/include/sys/cdefs.h	10 May 2007 20:15:11 -0000	1.3
+@@ -2,6 +2,12 @@
+ 
+ #include <misc/sys/cdefs.h>
+ 
++/* The compiler will optimize based on the knowledge the parameter is
++   not NULL.  This will omit tests.  A robust implementation cannot allow
++   this so when compiling glibc itself we ignore this attribute.  */
++#undef __nonnull
++#define __nonnull(params)
++
+ extern void __chk_fail (void) __attribute__ ((__noreturn__));
+ libc_hidden_proto (__chk_fail)
+ rtld_hidden_proto (__chk_fail)

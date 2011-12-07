@@ -1,0 +1,253 @@
+2007-01-15  Jakub Jelinek  <jakub@redhat.com>
+
+	* soft-fp/op-common.h (FP_TRUNC): When truncating a NaN, clear
+	workbits in semi-raw fraction.
+
+	* math/test-misc.c: Add new tests.
+
+2007-01-14  Steven Munroe  <sjmunroe@us.ibm.com>
+
+	* math/basic-test.c: Include test-skeleton.c.
+	(TEST_TRUNC): Define.
+	(truncdfsf_test, trunctfsf_test, trunctfdf_test): New.
+	(main): Rename to ...
+	(do_test): ...this.  Run new tests.
+	(TEST_FUNCTION): Define.
+
+2006-10-05  Steven Munroe  <sjmunroe@us.ibm.com>
+	    Joe Kerian  <jkerian@us.us.ibm.com>
+
+	[BZ #2749]
+	* soft-fp/op-4.h (__FP_FRAC_SUB_3, __FP_FRAC_SUB_4): Correct borrow
+	handling for high words.
+	* soft-fp/op-common.h (_FP_OVERFLOW_SEMIRAW): Always set inexact
+	and overflow for infinity.
+
+--- libc/soft-fp/op-4.h	4 Apr 2006 08:24:47 -0000	1.8
++++ libc/soft-fp/op-4.h	15 Jan 2007 23:43:04 -0000	1.9
+@@ -564,7 +564,7 @@
+     r1 = x1 - y1;						\
+     _c2 = r1 > x1;						\
+     r1 -= _c1;							\
+-    _c2 |= r1 > _c1;						\
++    _c2 |= _c1 && (y1 == x1);					\
+     r2 = x2 - y2 - _c2;						\
+   } while (0)
+ #endif
+@@ -578,11 +578,11 @@
+     r1 = x1 - y1;						\
+     _c2 = r1 > x1;						\
+     r1 -= _c1;							\
+-    _c2 |= r1 > _c1;						\
++    _c2 |= _c1 && (y1 == x1);					\
+     r2 = x2 - y2;						\
+     _c3 = r2 > x2;						\
+     r2 -= _c2;							\
+-    _c3 |= r2 > _c2;						\
++    _c3 |= _c2 && (y2 == x2);					\
+     r3 = x3 - y3 - _c3;						\
+   } while (0)
+ #endif
+--- libc/soft-fp/op-common.h	4 Apr 2006 08:24:47 -0000	1.9
++++ libc/soft-fp/op-common.h	15 Jan 2007 23:43:04 -0000	1.10
+@@ -99,10 +99,10 @@ do {							\
+   else							\
+     {							\
+       X##_e = _FP_EXPMAX_##fs - 1;			\
+-      FP_SET_EXCEPTION(FP_EX_OVERFLOW);			\
+-      FP_SET_EXCEPTION(FP_EX_INEXACT);			\
+       _FP_FRAC_SET_##wc(X, _FP_MAXFRAC_##wc);		\
+     }							\
++    FP_SET_EXCEPTION(FP_EX_INEXACT);			\
++    FP_SET_EXCEPTION(FP_EX_OVERFLOW);			\
+ } while (0)
+ 
+ /* Check for a semi-raw value being a signaling NaN and raise the
+@@ -1252,6 +1252,9 @@ do {									     \
+ 	      _FP_FRAC_SRL_##swc(S, (_FP_WFRACBITS_##sfs		     \
+ 				     - _FP_WFRACBITS_##dfs));		     \
+ 	      _FP_FRAC_COPY_##dwc##_##swc(D, S);			     \
++	      /* Semi-raw NaN must have all workbits cleared.  */	     \
++	      _FP_FRAC_LOW_##dwc(D)					     \
++		&= ~(_FP_W_TYPE) ((1 << _FP_WORKBITS) - 1);		     \
+ 	      _FP_FRAC_HIGH_##dfs(D) |= _FP_QNANBIT_SH_##dfs;		     \
+ 	    }								     \
+ 	}								     \
+--- libc/math/basic-test.c	6 Jul 2001 04:55:35 -0000	1.3
++++ libc/math/basic-test.c	15 Jan 2007 23:43:04 -0000	1.4
+@@ -44,7 +44,7 @@ NAME (void)								      \
+ 									      \
+   zero_var = 0.0;							      \
+   one_var = 1.0;							      \
+-  NaN_var = zero_var/zero_var;						      \
++  NaN_var = zero_var / zero_var;					      \
+   Inf_var = one_var / zero_var;						      \
+ 									      \
+   (void) &zero_var;							      \
+@@ -103,21 +103,51 @@ NAME (void)								      \
+   check (#FLOAT " isinf (-HUGE_VALx) == -1", isinf (x1) == -1);		      \
+ }
+ 
++#define TEST_TRUNC(NAME, FLOAT, DOUBLE) \
++void									      \
++NAME (void)								      \
++{									      \
++  volatile DOUBLE Inf_var, NaN_var, zero_var, one_var;			      \
++  FLOAT x1, x2;								      \
++									      \
++  zero_var = 0.0;							      \
++  one_var = 1.0;							      \
++  NaN_var = zero_var / zero_var;					      \
++  Inf_var = one_var / zero_var;						      \
++									      \
++  (void) &NaN_var;							      \
++  (void) &Inf_var;							      \
++									      \
++  x1 = (FLOAT) NaN_var;							      \
++  check (" "#FLOAT" x = ("#FLOAT") ("#DOUBLE") NaN", isnan (x1) != 0);	      \
++  x2 = (FLOAT) Inf_var;							      \
++  check (" "#FLOAT" x = ("#FLOAT") ("#DOUBLE") Inf", isinf (x2) != 0);	      \
++}
++
+ TEST_FUNC (float_test, float, nanf, FLT_EPSILON, HUGE_VALF)
+ TEST_FUNC (double_test, double, nan, DBL_EPSILON, HUGE_VAL)
++TEST_TRUNC (truncdfsf_test, float, double)
+ #ifndef NO_LONG_DOUBLE
+ TEST_FUNC (ldouble_test, long double, nanl, LDBL_EPSILON, HUGE_VALL)
++TEST_TRUNC (trunctfsf_test, float, long double)
++TEST_TRUNC (trunctfdf_test, double, long double)
+ #endif
+ 
+ int
+-main (void)
++do_test (void)
+ {
+   float_test ();
+   double_test ();
++  truncdfsf_test();
+ 
+ #ifndef NO_LONG_DOUBLE
+   ldouble_test ();
++  trunctfsf_test();
++  trunctfdf_test();
+ #endif
+ 
+   return errors != 0;
+ }
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"
+--- libc/math/test-misc.c	19 Mar 2005 00:28:20 -0000	1.20
++++ libc/math/test-misc.c	15 Jan 2007 23:43:04 -0000	1.21
+@@ -44,7 +44,6 @@ main (void)
+       }
+   }
+ 
+-# if __GNUC__ >= 3 || __GNUC_MINOR__ >= 96
+   {
+     long double x;
+     long double m;
+@@ -52,17 +51,17 @@ main (void)
+     int e;
+     int i;
+ 
+-#  if LDBL_MANT_DIG == 64
++# if LDBL_MANT_DIG == 64
+     m = 0xf.fffffffffffffffp-4L;
+-#  elif LDBL_MANT_DIG == 106
++# elif LDBL_MANT_DIG == 106
+     /* This has to match the mantissa of LDBL_MAX which actually does have a
+        missing bit in the middle.  */
+     m = 0x1.fffffffffffff7ffffffffffff8p-1L;
+-#  elif LDBL_MANT_DIG == 113
++# elif LDBL_MANT_DIG == 113
+     m = 0x1.ffffffffffffffffffffffffffffp-1L;
+-#  else
+-#   error "Please adjust"
+-#  endif
++# else
++#  error "Please adjust"
++# endif
+ 
+     for (i = LDBL_MAX_EXP, x = LDBL_MAX; i >= LDBL_MIN_EXP; --i, x /= 2.0L)
+       {
+@@ -106,9 +105,8 @@ main (void)
+       }
+ 
+   }
+-# endif
+ 
+-#if 0
++# if 0
+   {
+     int e;
+     long double r = frexpl (LDBL_MIN * LDBL_EPSILON, &e);
+@@ -126,7 +124,7 @@ main (void)
+ 	result = 1;
+       }
+   }
+-#endif
++# endif
+ #endif
+ 
+   {
+@@ -1183,5 +1181,59 @@ main (void)
+     }
+ #endif
+ 
++  volatile float f1 = FLT_MAX;
++  volatile float f2 = FLT_MAX / 2;
++  (void) &f1;
++  (void) &f2;
++  feclearexcept (FE_ALL_EXCEPT);
++  f2 += f1;
++  int fe = fetestexcept (FE_ALL_EXCEPT);
++  if (fe != (FE_OVERFLOW | FE_INEXACT))
++    {
++      printf ("float overflow test failed: %x\n", fe);
++      result = 1;
++    }
++
++  volatile double d1 = DBL_MAX;
++  volatile double d2 = DBL_MAX / 2;
++  (void) &d1;
++  (void) &d2;
++  feclearexcept (FE_ALL_EXCEPT);
++  d2 += d1;
++  fe = fetestexcept (FE_ALL_EXCEPT);
++  if (fe != (FE_OVERFLOW | FE_INEXACT))
++    {
++      printf ("double overflow test failed: %x\n", fe);
++      result = 1;
++    }
++
++#ifndef NO_LONG_DOUBLE
++  volatile long double ld1 = LDBL_MAX;
++  volatile long double ld2 = LDBL_MAX / 2;
++  (void) &ld1;
++  (void) &ld2;
++  feclearexcept (FE_ALL_EXCEPT);
++  ld2 += ld1;
++  fe = fetestexcept (FE_ALL_EXCEPT);
++  if (fe != (FE_OVERFLOW | FE_INEXACT))
++    {
++      printf ("long double overflow test failed: %x\n", fe);
++      result = 1;
++    }
++#endif
++
++#if !defined NO_LONG_DOUBLE && LDBL_MANT_DIG == 113
++  volatile long double ld3 = 0x1.0000000000010000000100000001p+1;
++  volatile long double ld4 = 0x1.0000000000000000000000000001p+1;
++  (void) &ld3;
++  (void) &ld4;
++  ld3 -= ld4;
++  if (ld3 != 0x1.0p-47)
++    {
++      printf ("long double subtraction test failed %.28La\n", ld3);
++      result = 1;
++    }
++#endif
++
+   return result;
+ }

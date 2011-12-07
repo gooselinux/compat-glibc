@@ -1,0 +1,216 @@
+2008-05-10  Ulrich Drepper  <drepper@redhat.com>
+
+	* nscd/cache.c (cache_add): Before returning with failure and this
+	is the first use of the record, mark it as unusable.
+	* nscd/aicache.c: Don't touch the dataset after cache_add returns
+	reporting a failure.
+	* nscd/grpcache.c: Likewise
+	* nscd/hstcache.c: Likewise.
+	* nscd/initgrcache.c: Likewise.
+	* nscd/pwdcache.c: Likewise.
+
+--- libc/nscd/aicache.c	10 May 2008 23:23:52 -0000	1.19
++++ libc/nscd/aicache.c	11 May 2008 03:02:54 -0000	1.20
+@@ -464,10 +464,8 @@ addhstaiX (struct database_dyn *db, int 
+ 		 MS_ASYNC);
+ 	}
+ 
+-      if (cache_add (req->type, key_copy, req->key_len, &dataset->head, true,
+-		     db, uid) < 0)
+-	/* Ensure the data can be recovered.  */
+-	dataset->head.usable = false;
++      (void) cache_add (req->type, key_copy, req->key_len, &dataset->head,
++			true, db, uid);
+ 
+       pthread_rwlock_unlock (&db->lock);
+ 
+--- libc/nscd/cache.c	19 Apr 2008 16:41:46 -0000	1.36
++++ libc/nscd/cache.c	11 May 2008 03:02:25 -0000	1.37
+@@ -138,7 +138,13 @@ cache_add (int type, const void *key, si
+   newp = mempool_alloc (table, sizeof (struct hashentry), 0);
+   /* If we cannot allocate memory, just do not do anything.  */
+   if (newp == NULL)
+-    return -1;
++    {  
++      /* If necessary mark the entry as unusable so that lookups will
++	 not use it.  */
++      if (first)
++	packet->usable = false;
++      return -1;
++    }
+ 
+   newp->type = type;
+   newp->first = first;
+--- libc/nscd/grpcache.c	19 Apr 2008 16:42:32 -0000	1.51
++++ libc/nscd/grpcache.c	11 May 2008 03:02:54 -0000	1.52
+@@ -142,10 +142,8 @@ cache_addgr (struct database_dyn *db, in
+ 			 + sizeof (struct dataset) + req->key_len, MS_ASYNC);
+ 		}
+ 
+-	      if (cache_add (req->type, &dataset->strdata, req->key_len,
+-			     &dataset->head, true, db, owner) < 0)
+-		/* Ensure the data can be recovered.  */
+-		dataset->head.usable = false;
++	      (void) cache_add (req->type, &dataset->strdata, req->key_len,
++				&dataset->head, true, db, owner);
+ 
+ 	      pthread_rwlock_unlock (&db->lock);
+ 
+@@ -339,12 +337,7 @@ cache_addgr (struct database_dyn *db, in
+ 	    {
+ 	      if (cache_add (GETGRBYGID, cp, key_offset, &dataset->head, true,
+ 			     db, owner) < 0)
+-		{
+-		  /* Could not allocate memory.  Make sure the data gets
+-		     discarded.  */
+-		  dataset->head.usable = false;
+-		  goto out;
+-		}
++		goto out;
+ 
+ 	      first = false;
+ 	    }
+@@ -353,12 +346,7 @@ cache_addgr (struct database_dyn *db, in
+ 	    {
+ 	      if (cache_add (GETGRBYNAME, key_copy, key_len + 1,
+ 			     &dataset->head, true, db, owner) < 0)
+-		{
+-		  /* Could not allocate memory.  Make sure the data gets
+-		     discarded.  */
+-		  dataset->head.usable = false;
+-		  goto out;
+-		}
++		goto out;
+ 
+ 	      first = false;
+ 	    }
+@@ -372,12 +360,8 @@ cache_addgr (struct database_dyn *db, in
+ 	    {
+ 	      if (req->type == GETGRBYNAME && db->propagate)
+ 		(void) cache_add (GETGRBYGID, cp, key_offset, &dataset->head,
+-				  req->type != GETGRBYNAME, db, owner);
++				  false, db, owner);
+ 	    }
+-	  else if (first)
+-	    /* Could not allocate memory.  Make sure the data gets
+-	       discarded.  */
+-	    dataset->head.usable = false;
+ 
+ 	out:
+ 	  pthread_rwlock_unlock (&db->lock);
+--- libc/nscd/hstcache.c	19 Apr 2008 16:42:32 -0000	1.47
++++ libc/nscd/hstcache.c	11 May 2008 03:02:54 -0000	1.48
+@@ -151,10 +151,8 @@ cache_addhst (struct database_dyn *db, i
+ 			 + sizeof (struct dataset) + req->key_len, MS_ASYNC);
+ 		}
+ 
+-	      if (cache_add (req->type, &dataset->strdata, req->key_len,
+-			     &dataset->head, true, db, owner) < 0)
+-		/* Ensure the data can be recovered.  */
+-		dataset->head.usable = false;
++	      (void) cache_add (req->type, &dataset->strdata, req->key_len,
++				&dataset->head, true, db, owner);
+ 
+ 	      pthread_rwlock_unlock (&db->lock);
+ 
+@@ -386,11 +384,8 @@ cache_addhst (struct database_dyn *db, i
+ 		  || req->type == GETHOSTBYADDR
+ 		  || req->type == GETHOSTBYADDRv6);
+ 
+-	  if (cache_add (req->type, key_copy, req->key_len,
+-			 &dataset->head, true, db, owner) < 0)
+-	    /* Could not allocate memory.  Make sure the
+-	       data gets discarded.  */
+-	    dataset->head.usable = false;
++	  (void) cache_add (req->type, key_copy, req->key_len,
++			    &dataset->head, true, db, owner);
+ 
+ 	  pthread_rwlock_unlock (&db->lock);
+ 	}
+--- libc/nscd/initgrcache.c	19 Apr 2008 16:42:32 -0000	1.13
++++ libc/nscd/initgrcache.c	11 May 2008 03:02:54 -0000	1.14
+@@ -226,10 +226,8 @@ addinitgroupsX (struct database_dyn *db,
+ 			 + sizeof (struct dataset) + req->key_len, MS_ASYNC);
+ 		}
+ 
+-	      if (cache_add (req->type, key_copy, req->key_len,
+-			     &dataset->head, true, db, uid) < 0)
+-		/* Ensure the data can be recovered.  */
+-		dataset->head.usable = false;
++	      (void) cache_add (req->type, key_copy, req->key_len,
++				&dataset->head, true, db, uid);
+ 
+ 	      pthread_rwlock_unlock (&db->lock);
+ 
+@@ -383,11 +381,8 @@ addinitgroupsX (struct database_dyn *db,
+ 		     req->key_len, MS_ASYNC);
+ 	    }
+ 
+-	  if (cache_add (INITGROUPS, cp, req->key_len, &dataset->head, true,
+-			 db, uid) < 0)
+-	    /* Could not allocate memory.  Make sure the data gets
+-	       discarded.  */
+-	    dataset->head.usable = false;
++	  (void) cache_add (INITGROUPS, cp, req->key_len, &dataset->head, true,
++			    db, uid);
+ 
+ 	  pthread_rwlock_unlock (&db->lock);
+ 	}
+--- libc/nscd/pwdcache.c	19 Apr 2008 16:42:32 -0000	1.49
++++ libc/nscd/pwdcache.c	11 May 2008 03:02:54 -0000	1.50
+@@ -149,11 +149,8 @@ cache_addpw (struct database_dyn *db, in
+ 			 + sizeof (struct dataset) + req->key_len, MS_ASYNC);
+ 		}
+ 
+-	      if (cache_add (req->type, key_copy, req->key_len,
+-			     &dataset->head, true, db, owner) < 0)
+-		/* Ensure the data can be recovered.  */
+-		dataset->head.usable = false;
+-
++	      (void) cache_add (req->type, key_copy, req->key_len,
++				&dataset->head, true, db, owner);
+ 
+ 	      pthread_rwlock_unlock (&db->lock);
+ 
+@@ -335,12 +332,7 @@ cache_addpw (struct database_dyn *db, in
+ 	    {
+ 	      if (cache_add (GETPWBYUID, cp, key_offset, &dataset->head, true,
+ 			     db, owner) < 0)
+-		{
+-		  /* Could not allocate memory.  Make sure the data gets
+-		     discarded.  */
+-		  dataset->head.usable = false;
+-		  goto out;
+-		}
++		goto out;
+ 
+ 	      first = false;
+ 	    }
+@@ -349,12 +341,7 @@ cache_addpw (struct database_dyn *db, in
+ 	    {
+ 	      if (cache_add (GETPWBYNAME, key_copy, key_len + 1,
+ 			     &dataset->head, true, db, owner) < 0)
+-		{
+-		  /* Could not allocate memory.  Make sure the data gets
+-		     discarded.  */
+-		  dataset->head.usable = false;
+-		  goto out;
+-		}
++		goto out;
+ 
+ 	      first = false;
+ 	    }
+@@ -367,12 +354,8 @@ cache_addpw (struct database_dyn *db, in
+ 	    {
+ 	      if (req->type == GETPWBYNAME && db->propagate)
+ 		(void) cache_add (GETPWBYUID, cp, key_offset, &dataset->head,
+-				  req->type != GETPWBYNAME, db, owner);
++				  false, db, owner);
+ 	    }
+-	  else if (first)
+-	    /* Could not allocate memory.  Make sure the data gets
+-	       discarded.  */
+-	    dataset->head.usable = false;
+ 
+ 	out:
+ 	  pthread_rwlock_unlock (&db->lock);

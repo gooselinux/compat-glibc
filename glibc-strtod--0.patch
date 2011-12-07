@@ -1,0 +1,147 @@
+2007-08-03  Jakub Jelinek  <jakub@redhat.com>
+
+	* stdlib/strtod_l.c (____STRTOF_INTERNAL): Properly handle -0.
+	* stdlib/Makefile (tests): Add tst-strtod5.
+	(tst-strtod5-ENV): New.
+	* stdlib/tst-strtod5.c: New file.
+
+--- libc/stdlib/Makefile	11 Jan 2007 17:37:12 -0000	1.117
++++ libc/stdlib/Makefile	3 Aug 2007 16:45:35 -0000	1.118
+@@ -68,7 +68,7 @@ tests		:= tst-strtol tst-strtod testmb t
+ 		   tst-limits tst-rand48 bug-strtod tst-setcontext	    \
+ 		   test-a64l tst-qsort tst-system testmb2 bug-strtod2	    \
+ 		   tst-atof1 tst-atof2 tst-strtod2 tst-strtod3 tst-rand48-2 \
+-		   tst-makecontext tst-strtod4
++		   tst-makecontext tst-strtod4 tst-strtod5
+ 
+ include ../Makeconfig
+ 
+@@ -115,6 +115,7 @@ test-canon-ARGS = --test-dir=${common-ob
+ tst-strtod-ENV = LOCPATH=$(common-objpfx)localedata
+ tst-strtod3-ENV = LOCPATH=$(common-objpfx)localedata
+ tst-strtod4-ENV = LOCPATH=$(common-objpfx)localedata
++tst-strtod5-ENV = LOCPATH=$(common-objpfx)localedata
+ testmb2-ENV = LOCPATH=$(common-objpfx)localedata
+ 
+ # Run a test on the header files we use.
+--- libc/stdlib/strtod_l.c	22 Feb 2007 04:14:02 -0000	1.24
++++ libc/stdlib/strtod_l.c	3 Aug 2007 16:45:24 -0000	1.25
+@@ -700,7 +700,8 @@ ____STRTOF_INTERNAL (nptr, endptr, group
+ #endif
+       /* If TP is at the start of the digits, there was no correctly
+ 	 grouped prefix of the string; so no number found.  */
+-      RETURN (0.0, tp == start_of_digits ? (base == 16 ? cp - 1 : nptr) : tp);
++      RETURN (negative ? -0.0 : 0.0,
++	      tp == start_of_digits ? (base == 16 ? cp - 1 : nptr) : tp);
+     }
+ 
+   /* Remember first significant digit and read following characters until the
+@@ -759,7 +760,7 @@ ____STRTOF_INTERNAL (nptr, endptr, group
+ 	  if (tp < startp)
+ 	    /* The number is validly grouped, but consists
+ 	       only of zeroes.  The whole value is zero.  */
+-	    RETURN (0.0, tp);
++	    RETURN (negative ? -0.0 : 0.0, tp);
+ 
+ 	  /* Recompute DIG_NO so we won't read more digits than
+ 	     are properly grouped.  */
+@@ -862,7 +863,7 @@ ____STRTOF_INTERNAL (nptr, endptr, group
+ 		    {
+ 		      /* Overflow or underflow.  */
+ 		      __set_errno (ERANGE);
+-		      result = (exp_negative ? 0.0 :
++		      result = (exp_negative ? (negative ? -0.0 : 0.0) :
+ 				negative ? -FLOAT_HUGE_VAL : FLOAT_HUGE_VAL);
+ 		    }
+ 
+--- libc/stdlib/tst-strtod5.c	1 Jan 1970 00:00:00 -0000
++++ libc/stdlib/tst-strtod5.c	3 Aug 2007 16:45:08 -0000	1.1
+@@ -0,0 +1,88 @@
++#include <locale.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <math.h>
++
++#define NBSP "\xc2\xa0"
++
++static const struct
++{
++  const char *in;
++  int group;
++  double expected;
++} tests[] =
++  {
++    { "0", 0, 0.0 },
++    { "000", 0, 0.0 },
++    { "-0", 0, -0.0 },
++    { "-000", 0, -0.0 },
++    { "0,", 0, 0.0 },
++    { "-0,", 0, -0.0 },
++    { "0,0", 0, 0.0 },
++    { "-0,0", 0, -0.0 },
++    { "0e-10", 0, 0.0 },
++    { "-0e-10", 0, -0.0 },
++    { "0,e-10", 0, 0.0 },
++    { "-0,e-10", 0, -0.0 },
++    { "0,0e-10", 0, 0.0 },
++    { "-0,0e-10", 0, -0.0 },
++    { "0e-1000000", 0, 0.0 },
++    { "-0e-1000000", 0, -0.0 },
++    { "0,0e-1000000", 0, 0.0 },
++    { "-0,0e-1000000", 0, -0.0 },
++    { "0", 1, 0.0 },
++    { "000", 1, 0.0 },
++    { "-0", 1, -0.0 },
++    { "-000", 1, -0.0 },
++    { "0e-10", 1, 0.0 },
++    { "-0e-10", 1, -0.0 },
++    { "0e-1000000", 1, 0.0 },
++    { "-0e-1000000", 1, -0.0 },
++    { "000"NBSP"000"NBSP"000", 1, 0.0 },
++    { "-000"NBSP"000"NBSP"000", 1, -0.0 }
++  };
++#define NTESTS (sizeof (tests) / sizeof (tests[0]))
++
++
++static int
++do_test (void)
++{
++  if (setlocale (LC_ALL, "cs_CZ.UTF-8") == NULL)
++    {
++      puts ("could not set locale");
++      return 1;
++    }
++
++  int status = 0;
++
++  for (int i = 0; i < NTESTS; ++i)
++    {
++      char *ep;
++      double r;
++
++      if (tests[i].group)
++	r = __strtod_internal (tests[i].in, &ep, 1);
++      else
++	r = strtod (tests[i].in, &ep);
++
++      if (*ep != '\0')
++	{
++	  printf ("%d: got rest string \"%s\", expected \"\"\n", i, ep);
++	  status = 1;
++	}
++
++      if (r != tests[i].expected
++	  || copysign (10.0, r) != copysign (10.0, tests[i].expected))
++	{
++	  printf ("%d: got wrong results %g, expected %g\n",
++		  i, r, tests[i].expected);
++	  status = 1;
++	}
++    }
++
++  return status;
++}
++
++#define TEST_FUNCTION do_test ()
++#include "../test-skeleton.c"

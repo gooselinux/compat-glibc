@@ -1,0 +1,81 @@
+2006-07-02  Jakub Jelinek  <jakub@redhat.com>
+
+	* nscd/connections.c (sighup_pending): New variable.
+	(nscd_run): If sighup_pending, prune all 3 caches.
+	(sighup_handler): Don't prune caches here, rather just set
+	sighup_pending flag.
+
+--- libc/nscd/connections.c.jj	2006-07-02 11:47:20.000000000 +0200
++++ libc/nscd/connections.c	2006-07-02 12:57:22.000000000 +0200
+@@ -66,6 +67,7 @@ static gid_t *server_groups;
+ # define NGROUPS 32
+ #endif
+ static int server_ngroups;
++static volatile int sighup_pending;
+ 
+ static pthread_attr_t attr;
+ 
+@@ -1283,6 +1285,10 @@ nscd_run (void *p)
+ 	      if (readylist == NULL && to == ETIMEDOUT)
+ 		{
+ 		  --nready;
++
++		  if (sighup_pending)
++		    goto sighup_prune;
++
+ 		  pthread_mutex_unlock (&readylist_lock);
+ 		  goto only_prune;
+ 		}
+@@ -1292,6 +1298,34 @@ nscd_run (void *p)
+ 	    pthread_cond_wait (&readylist_cond, &readylist_lock);
+ 	}
+ 
++      if (sighup_pending)
++	{
++	  --nready;
++	  pthread_cond_signal (&readylist_cond);
++	sighup_prune:
++	  sighup_pending = 0;
++	  pthread_mutex_unlock (&readylist_lock);
++
++	  /* Prune the password database.  */
++	  if (dbs[pwddb].enabled)
++	    prune_cache (&dbs[pwddb], LONG_MAX, -1);
++
++	  /* Prune the group database.  */
++	  if (dbs[grpdb].enabled)
++	    prune_cache (&dbs[grpdb], LONG_MAX, -1);
++
++	  /* Prune the host database.  */
++	  if (dbs[hstdb].enabled)
++	    prune_cache (&dbs[hstdb], LONG_MAX, -1);
++
++	  /* Re-locking.  */
++	  pthread_mutex_lock (&readylist_lock);
++
++	  /* One more thread available.  */
++	  ++nready;
++	  continue;
++	}
++
+       struct fdlist *it = readylist->next;
+       if (readylist->next == readylist)
+ 	/* Just one entry on the list.  */
+@@ -1902,16 +1936,5 @@ finish_drop_privileges (void)
+ void
+ sighup_handler (int signum)
+ {
+-  /* Prune the password database.  */
+-  if (dbs[pwddb].enabled)
+-    prune_cache (&dbs[pwddb], LONG_MAX, -1);
+-    
+-  /* Prune the group database.  */
+-  if (dbs[grpdb].enabled)
+-    prune_cache (&dbs[grpdb], LONG_MAX, -1);
+-
+-  /* Prune the host database.  */
+-  if (dbs[hstdb].enabled)
+-    prune_cache (&dbs[hstdb], LONG_MAX, -1);
++  sighup_pending = 1;
+ }
+-

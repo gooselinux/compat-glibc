@@ -1,0 +1,30 @@
+2008-06-11  Ulrich Drepper  <drepper@redhat.com>
+
+	* nscd/mem.c (gc): Initialize obstack earlier so that if we jump
+	out we don't use uninitialized memory.
+
+--- libc/nscd/mem.c	18 May 2008 06:28:54 -0000	1.18
++++ libc/nscd/mem.c	12 Jun 2008 04:52:27 -0000	1.19
+@@ -235,6 +235,11 @@ gc (struct database_dyn *db)
+   /* Sort the entries by their address.  */
+   qsort (he, cnt, sizeof (struct hashentry *), sort_he);
+ 
++#define obstack_chunk_alloc xmalloc
++#define obstack_chunk_free free
++  struct obstack ob;
++  obstack_init (&ob);
++
+   /* Determine the highest used address.  */
+   size_t high = nmark;
+   while (high > 0 && mark[high - 1] == 0)
+@@ -307,10 +312,6 @@ gc (struct database_dyn *db)
+     size_t size;
+     struct moveinfo *next;
+   } *moves = NULL;
+-#define obstack_chunk_alloc xmalloc
+-#define obstack_chunk_free free
+-  struct obstack ob;
+-  obstack_init (&ob);
+ 
+   while (byte < high)
+     {

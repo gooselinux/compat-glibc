@@ -1,0 +1,18 @@
+2007-04-16  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #4364]
+	* posix/unistd.h (_XOPEN_VERSION): Define appropriately for SUSv3.
+
+--- libc/posix/unistd.h	9 Nov 2006 21:51:58 -0000	1.148
++++ libc/posix/unistd.h	16 Apr 2007 23:44:06 -0000	1.149
+@@ -56,7 +56,9 @@ __BEGIN_DECLS
+ #define _POSIX2_LOCALEDEF       200112L
+ 
+ /* X/Open version number to which the library conforms.  It is selectable.  */
+-#ifdef __USE_UNIX98
++#ifdef __USE_XOPEN2K
++# define _XOPEN_VERSION	600
++#elif defined __USE_UNIX98
+ # define _XOPEN_VERSION	500
+ #else
+ # define _XOPEN_VERSION	4

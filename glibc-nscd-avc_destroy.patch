@@ -1,0 +1,57 @@
+2009-05-14  Jakub Jelinek  <jakub@redhat.com>
+
+	* nscd/selinux.c (nscd_avc_destroy): Removed.
+	* nscd/selinux.h (nscd_avc_destroy): Likewise.
+	* nscd/nscd.c (termination_handler): Don't call
+	nscd_avc_destroy.
+
+--- libc/nscd/nscd.c.jj	2009-02-16 14:47:30.000000000 +0100
++++ libc/nscd/nscd.c	2009-05-14 01:13:59.000000000 +0200
+@@ -488,10 +488,6 @@ termination_handler (int signum)
+ 	msync (dbs[cnt].head, dbs[cnt].memsize, MS_ASYNC);
+     }
+ 
+-  /* Shutdown the SELinux AVC.  */
+-  if (selinux_enabled)
+-    nscd_avc_destroy ();
+-
+   _exit (EXIT_SUCCESS);
+ }
+ 
+--- libc/nscd/selinux.c.jj	2007-12-10 09:05:34.000000000 +0100
++++ libc/nscd/selinux.c	2009-05-14 01:15:02.000000000 +0200
+@@ -418,15 +418,4 @@ nscd_avc_print_stats (struct avc_cache_s
+ 	  cstats->cav_probes, cstats->cav_misses);
+ }
+ 
+-
+-/* Clean up the AVC before exiting.  */
+-void
+-nscd_avc_destroy (void)
+-{
+-  avc_destroy ();
+-#ifdef HAVE_LIBAUDIT
+-  audit_close (audit_fd);
+-#endif
+-}
+-
+ #endif /* HAVE_SELINUX */
+--- libc/nscd/selinux.h.jj	2007-04-23 10:54:02.000000000 +0200
++++ libc/nscd/selinux.h	2009-05-14 01:14:40.000000000 +0200
+@@ -35,8 +35,6 @@ struct avc_cache_stats;
+ 
+ /* Initialize the userspace AVC.  */
+ extern void nscd_avc_init (void);
+-/* Destroy the userspace AVC.  */
+-extern void nscd_avc_destroy (void);
+ /* Determine if we are running on an SELinux kernel.  */
+ extern void nscd_selinux_enabled (int *selinux_enabled);
+ /* Check if the client has permission for the request type.  */
+@@ -55,7 +53,6 @@ extern void install_real_capabilities (c
+ #else
+ # define selinux_enabled 0
+ # define nscd_avc_init() (void) 0
+-# define nscd_avc_destroy() (void) 0
+ # define nscd_selinux_enabled(selinux_enabled) (void) 0
+ # define nscd_request_avc_has_perm(fd, req) 0
+ # define nscd_avc_cache_stats(cstats) (void) 0

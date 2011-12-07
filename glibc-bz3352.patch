@@ -1,0 +1,30 @@
+2006-10-13  Ulrich Drepper  <drepper@redhat.com>
+
+	* elf/dl-minimal.c (realloc): Optimize last patch.
+
+2006-10-12  Richard Sandiford  <richard@codesourcery.com>
+
+	[BZ #3352]
+	* elf/dl-minimal.c (realloc): Let malloc() return a new pointer,
+	and use memcpy() if it does.
+
+--- libc/elf/dl-minimal.c	17 Dec 2005 23:08:29 -0000	1.50
++++ libc/elf/dl-minimal.c	13 Oct 2006 16:18:12 -0000	1.52
+@@ -128,14 +129,13 @@ free (void *ptr)
+ void * weak_function
+ realloc (void *ptr, size_t n)
+ {
+-  void *new;
+   if (ptr == NULL)
+     return malloc (n);
+   assert (ptr == alloc_last_block);
++  size_t old_size = alloc_ptr - alloc_last_block;
+   alloc_ptr = alloc_last_block;
+-  new = malloc (n);
+-  assert (new == ptr);
+-  return new;
++  void *new = malloc (n);
++  return new != ptr ? memcpy (new, ptr, old_size) : new;
+ }
+ 
+ /* Avoid signal frobnication in setjmp/longjmp.  Keeps things smaller.  */

@@ -1,0 +1,62 @@
+2006-11-10  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #3451]
+	* sysdeps/i386/fpu/bits/mathinline.h (floor): Make rounding mode
+	change atomic.
+	(ceil): Likewise.
+
+--- libc/sysdeps/i386/fpu/bits/mathinline.h	7 Sep 2004 22:23:42 -0000	1.58
++++ libc/sysdeps/i386/fpu/bits/mathinline.h	10 Nov 2006 20:42:00 -0000	1.60
+@@ -529,24 +529,38 @@ __inline_mathcodeNP (tanh, __x, \
+ 
+ __inline_mathcodeNP (floor, __x, \
+   register long double __value;						      \
+-  __volatile unsigned short int __cw;					      \
+-  __volatile unsigned short int __cwtmp;				      \
+-  __asm __volatile ("fnstcw %0" : "=m" (__cw));				      \
+-  __cwtmp = (__cw & 0xf3ff) | 0x0400; /* rounding down */		      \
+-  __asm __volatile ("fldcw %0" : : "m" (__cwtmp));			      \
+-  __asm __volatile ("frndint" : "=t" (__value) : "0" (__x));		      \
+-  __asm __volatile ("fldcw %0" : : "m" (__cw));				      \
++  register int __ignore;						      \
++  unsigned short int __cw;						      \
++  unsigned short int __cwtmp;						      \
++  __asm __volatile ("fnstcw %3\n\t"					      \
++		    "movzwl %3, %1\n\t"					      \
++		    "andl $0xf3ff, %1\n\t"				      \
++		    "orl $0x0400, %1\n\t"	/* rounding down */	      \
++		    "movw %w1, %2\n\t"					      \
++		    "fldcw %2\n\t"					      \
++		    "frndint\n\t"					      \
++		    "fldcw %3"						      \
++		    : "=t" (__value), "=&q" (__ignore), "=m" (__cwtmp),	      \
++		      "=m" (__cw)					      \
++		    : "0" (__x));					      \
+   return __value)
+ 
+ __inline_mathcodeNP (ceil, __x, \
+   register long double __value;						      \
+-  __volatile unsigned short int __cw;					      \
+-  __volatile unsigned short int __cwtmp;				      \
+-  __asm __volatile ("fnstcw %0" : "=m" (__cw));				      \
+-  __cwtmp = (__cw & 0xf3ff) | 0x0800; /* rounding up */			      \
+-  __asm __volatile ("fldcw %0" : : "m" (__cwtmp));			      \
+-  __asm __volatile ("frndint" : "=t" (__value) : "0" (__x));		      \
+-  __asm __volatile ("fldcw %0" : : "m" (__cw));				      \
++  register int __ignore;						      \
++  unsigned short int __cw;						      \
++  unsigned short int __cwtmp;						      \
++  __asm __volatile ("fnstcw %3\n\t"					      \
++		    "movzwl %3, %1\n\t"					      \
++		    "andl $0xf3ff, %1\n\t"				      \
++		    "orl $0x0800, %1\n\t"	/* rounding up */	      \
++		    "movw %w1, %2\n\t"					      \
++		    "fldcw %2\n\t"					      \
++		    "frndint\n\t"					      \
++		    "fldcw %3"						      \
++		    : "=t" (__value), "=&q" (__ignore), "=m" (__cwtmp),	      \
++		      "=m" (__cw)					      \
++		    : "0" (__x));					      \
+   return __value)
+ 
+ #ifdef __FAST_MATH__

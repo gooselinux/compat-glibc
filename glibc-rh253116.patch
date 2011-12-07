@@ -1,0 +1,2124 @@
+2007-03-20  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/unix/sysv/linux/powerpc/libc-start.c
+	(__cache_line_size): Define the variable here.  Add
+	attribute_hidden, remove weak_extern.
+	(__libc_start_main): Set __cache_line_size
+	unconditionally.
+	* sysdeps/unix/sysv/linux/powerpc/dl-sysdep.c
+	(__cache_line_size): Define the variable here.  Add
+	attribute_hidden, remove weak_extern.
+	(DL_PLATFORM_AUXV): Set __cache_line_size
+	unconditionally.
+	* sysdeps/powerpc/powerpc32/dl-machine.c (__cache_line_size): Remove
+	weak_extern, add attribute_hidden.
+	(__elf_machine_runtime_setup): Assume __cache_line_size is always
+	defined in ld.so.
+	* sysdeps/powerpc/powerpc32/memset.S (__cache_line_size): Remove
+	definition.
+	* sysdeps/powerpc/powerpc64/memset.S (__cache_line_size): Likewise.
+
+--- libc/sysdeps/powerpc/powerpc32/dl-machine.c	27 Oct 2006 23:11:46 -0000	1.12
++++ libc/sysdeps/powerpc/powerpc32/dl-machine.c	26 Mar 2007 20:08:49 -0000	1.13
+@@ -26,10 +26,9 @@
+ #include <dl-machine.h>
+ #include <stdio-common/_itoa.h>
+ 
+-/* The value __cache_line_size is defined in memset.S and is initialised
++/* The value __cache_line_size is defined in dl-sysdep.c and is initialised
+    by _dl_sysdep_start via DL_PLATFORM_INIT.  */
+-extern int __cache_line_size;
+-weak_extern (__cache_line_size)
++extern int __cache_line_size attribute_hidden;
+ 
+ /* Because ld.so is now versioned, these functions can be in their own file;
+    no relocations need to be done to call them.
+@@ -318,15 +317,9 @@ __elf_machine_runtime_setup (struct link
+       /* Default minimum 4 words per cache line.  */
+       int line_size_words = 4;
+ 
+-      /* Don't try this until ld.so has relocated itself!  */
+-      int *line_size_ptr = &__cache_line_size;
+-      if (lazy && line_size_ptr != NULL)
+-	{
+-	  /*  Verify that __cache_line_size is defined and set.  */
+-	  if (*line_size_ptr != 0)
+-	    /* Convert bytes to words.  */
+-	    line_size_words = *line_size_ptr / 4;
+-	}
++      if (lazy && __cache_line_size != 0)
++	/* Convert bytes to words.  */
++	line_size_words = __cache_line_size / 4;
+ 
+       size_modified = lazy ? rel_offset_words : 6;
+       for (i = 0; i < size_modified; i += line_size_words)
+--- libc/sysdeps/powerpc/powerpc32/memset.S	17 Jun 2005 23:09:36 -0000	1.5
++++ libc/sysdeps/powerpc/powerpc32/memset.S	26 Mar 2007 20:09:07 -0000	1.6
+@@ -21,14 +21,6 @@
+ #include <bp-sym.h>
+ #include <bp-asm.h>
+ 
+-/* Define a global static that can hold the cache line size.  The
+-   assumption is that startup code will access the "aux vector" to
+-   to obtain the value set by the kernel and store it into this
+-   variable.  */
+-
+-	.globl __cache_line_size
+-	.lcomm __cache_line_size,4,4
+-
+ /* __ptr_t [r3] memset (__ptr_t s [r3], int c [r4], size_t n [r5]));
+    Returns 's'.
+ 
+--- libc/sysdeps/powerpc/powerpc64/memset.S	28 Apr 2005 22:20:48 -0000	1.5
++++ libc/sysdeps/powerpc/powerpc64/memset.S	26 Mar 2007 20:09:07 -0000	1.6
+@@ -21,12 +22,6 @@
+ #include <bp-sym.h>
+ #include <bp-asm.h>
+ 
+-/* Define a global static that can hold the cache line size.  The
+-   assumption is that startup code will access the "aux vector" to
+-   to obtain the value set by the kernel and store it into this
+-   variable.  */
+-	.globl __cache_line_size
+-	.lcomm __cache_line_size,4,4
+ 	.section	".toc","aw"
+ .LC0:
+ 	.tc __cache_line_size[TC],__cache_line_size
+--- libc/sysdeps/unix/sysv/linux/powerpc/dl-sysdep.c	8 Jan 2006 08:21:17 -0000	1.20
++++ libc/sysdeps/unix/sysv/linux/powerpc/dl-sysdep.c	26 Mar 2007 20:08:29 -0000	1.21
+@@ -21,8 +22,7 @@
+ #include <kernel-features.h>
+ #include <ldsodefs.h>
+ 
+-extern int __cache_line_size;
+-weak_extern (__cache_line_size)
++int __cache_line_size attribute_hidden;
+ 
+ /* Scan the Aux Vector for the "Data Cache Block Size" entry.  If found
+    verify that the static extern __cache_line_size is defined by checking
+@@ -30,12 +30,8 @@ weak_extern (__cache_line_size)
+    value to __cache_line_size.  */
+ #define DL_PLATFORM_AUXV						      \
+       case AT_DCACHEBSIZE:						      \
+-	{								      \
+-	  int *cls = & __cache_line_size;				      \
+-	  if (cls != NULL)						      \
+-	    *cls = av->a_un.a_val;					      \
+-	}								      \
+-      break;
++	__cache_line_size = av->a_un.a_val;				      \
++	break;
+ 
+ #ifndef __ASSUME_STD_AUXV
+ 
+--- libc/sysdeps/unix/sysv/linux/powerpc/libc-start.c	30 Dec 2005 07:30:11 -0000	1.1
++++ libc/sysdeps/unix/sysv/linux/powerpc/libc-start.c	26 Mar 2007 20:08:13 -0000	1.2
+@@ -22,8 +23,7 @@
+ #include <bp-start.h>
+ #include <bp-sym.h>
+ 
+-extern int __cache_line_size;
+-weak_extern (__cache_line_size)
++int __cache_line_size attribute_hidden;
+ /* The main work is done in the generic function.  */
+ #define LIBC_START_MAIN generic_start_main
+ #define LIBC_START_DISABLE_INLINE
+@@ -113,11 +113,7 @@ int
+     switch (av->a_type)
+       {
+       case AT_DCACHEBSIZE:
+-	{
+-	  int *cls = &__cache_line_size;
+-	  if (cls != NULL)
+-	    *cls = av->a_un.a_val;
+-	}
++	__cache_line_size = av->a_un.a_val;
+ 	break;
+       }
+ #ifdef SHARED
+--- libc/powerpc-cpu/ChangeLog.jj	2008-01-05 19:23:52.000000000 +0100
++++ libc/powerpc-cpu/ChangeLog	2008-01-08 09:55:27.000000000 +0100
+@@ -1,3 +1,40 @@
++2007-07-07  Steven Munroe  <sjmunroe@us.ibm.com>
++
++	* sysdeps/powerpc/powerpc32/power6/memset.S: Update comments.
++	Specify .machine power6 to get ISA-V2.0 branch hints.  Unroll loops
++	and avoid branch misspredicts for > 31 bytes memset case.
++	* sysdeps/powerpc/powerpc64/power6/memset.S: Likewise.
++	Remove toc ref to __cache_line_size.
++
++	* sysdeps/powerpc/powerpc32/power4/memcmp.S: Specify .machine power4
++	to get ISA-V2.0 branch hints.
++	* sysdeps/powerpc/powerpc32/power4/memcpy.S: Likewise
++	* sysdeps/powerpc/powerpc32/power4/memset.S: Likewise
++	* sysdeps/powerpc/powerpc32/power6/memcpy.S: Likewise.
++	* sysdeps/powerpc/powerpc64/power4/memcmp.S: Likewise.
++	* sysdeps/powerpc/powerpc64/power4/memcpy.S: Likewise.
++	* sysdeps/powerpc/powerpc64/power4/memset.S: Likewise.
++	Remove toc ref to __cache_line_size.
++
++	* sysdeps/powerpc/powerpc32/power6/fpu/s_llrint.S:
++	Include math_ldbl_opt.h.
++
++2007-06-01  Steven Munroe  <sjmunroe@us.ibm.com>
++
++	* sysdeps/powerpc/powerpc32/power6/memset.S: New file.
++	* sysdeps/powerpc/powerpc64/power6/memset.S: New file.
++
++2007-05-21  Steven Munroe  <sjmunroe@us.ibm.com>
++
++	* sysdeps/powerpc/powerpc32/power4/memset.S: New file.
++
++2006-02-13  Steven Munroe  <sjmunroe@us.ibm.com>
++
++	* sysdeps/powerpc/powerpc32/power6/fpu/s_llrint.S: New File.
++	* sysdeps/powerpc/powerpc32/power6/fpu/s_llrintf.S: New File.
++	* sysdeps/powerpc/powerpc32/power6/fpu/s_llround.S: New File.
++	* sysdeps/powerpc/powerpc32/power6/fpu/s_llroundf.S: New File.
++
+ 2006-10-20  Steven Munroe  <sjmunroe@us.ibm.com>
+ 
+ 	* sysdeps/powerpc/powerpc32/power4/fpu/slowpow.c: New file.
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/memcpy.S.jj	2006-09-15 16:40:37.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/memcpy.S	2008-01-08 09:43:09.000000000 +0100
+@@ -36,6 +36,7 @@
+    posible when both source and destination are doubleword aligned.
+    Each case has a optimized unrolled loop.   */
+ 
++	.machine power4
+ EALIGN (BP_SYM (memcpy), 5, 0)
+ 	CALL_MCOUNT 3
+ 
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/memset.S.jj	2008-01-08 09:43:09.000000000 +0100
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/memset.S	2008-01-08 09:43:09.000000000 +0100
+@@ -0,0 +1,275 @@
++/* Optimized memset implementation for PowerPC64.
++   Copyright (C) 1997, 1999, 2000, 2002, 2003, 2007
++   Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <sysdep.h>
++#include <bp-sym.h>
++#include <bp-asm.h>
++
++/* __ptr_t [r3] memset (__ptr_t s [r3], int c [r4], size_t n [r5]));
++   Returns 's'.
++
++   The memset is done in three sizes: byte (8 bits), word (32 bits),
++   cache line (256 bits). There is a special case for setting cache lines
++   to 0, to take advantage of the dcbz instruction.  */
++
++	.machine power4
++EALIGN (BP_SYM (memset), 5, 0)
++	CALL_MCOUNT 3
++
++#define rTMP	r0
++#define rRTN	r3	/* Initial value of 1st argument.  */
++#if __BOUNDED_POINTERS__
++# define rMEMP0	r4	/* Original value of 1st arg.  */
++# define rCHR	r5	/* Char to set in each byte.  */
++# define rLEN	r6	/* Length of region to set.  */
++# define rMEMP	r10	/* Address at which we are storing.  */
++#else
++# define rMEMP0	r3	/* Original value of 1st arg.  */
++# define rCHR	r4	/* Char to set in each byte.  */
++# define rLEN	r5	/* Length of region to set.  */
++# define rMEMP	r6	/* Address at which we are storing.  */
++#endif
++#define rALIGN	r7	/* Number of bytes we are setting now (when aligning). */
++#define rMEMP2	r8
++
++#define rNEG64	r8	/* Constant -64 for clearing with dcbz.  */
++#define rCLS	r8	/* Cache line size obtained from static.  */
++#define rCLM	r9	/* Cache line size mask to check for cache alignment.  */
++L(_memset):
++#if __BOUNDED_POINTERS__
++	cmpldi	cr1, rRTN, 0
++	CHECK_BOUNDS_BOTH_WIDE (rMEMP0, rTMP, rTMP2, rLEN)
++	beq	cr1, L(b0)
++	STORE_RETURN_VALUE (rMEMP0)
++	STORE_RETURN_BOUNDS (rTMP, rTMP2)
++L(b0):
++#endif
++/* Take care of case for size <= 4.  */
++	cmpldi	cr1, rLEN, 8
++	andi.	rALIGN, rMEMP0, 7
++	mr	rMEMP, rMEMP0
++	ble-	cr1, L(small)
++
++/* Align to doubleword boundary.  */
++	cmpldi	cr5, rLEN, 31
++	rlwimi	rCHR, rCHR, 8, 16, 23 /* Replicate byte to halfword.  */
++	beq+	L(aligned2)
++	mtcrf	0x01, rMEMP0
++	subfic	rALIGN, rALIGN, 8
++	cror	28,30,31		/* Detect odd word aligned.  */
++	add	rMEMP, rMEMP, rALIGN
++	sub	rLEN, rLEN, rALIGN
++	rlwimi	rCHR, rCHR, 16, 0, 15 /* Replicate halfword to word.  */
++	bt	29, L(g4)
++/* Process the even word of doubleword.  */
++	bf+	31, L(g2)
++	stb	rCHR, 0(rMEMP0)
++	bt	30, L(g4x)
++L(g2):
++	sth	rCHR, -6(rMEMP)
++L(g4x):
++	stw	rCHR, -4(rMEMP)
++	b	L(aligned)
++/* Process the odd word of doubleword.  */
++L(g4):
++	bf	28, L(g4x) /* If false, word aligned on odd word.  */
++	bf+	31, L(g0)
++	stb	rCHR, 0(rMEMP0)
++	bt	30, L(aligned)
++L(g0):
++	sth	rCHR, -2(rMEMP)
++
++/* Handle the case of size < 31.  */
++L(aligned2):
++	rlwimi	rCHR, rCHR, 16, 0, 15 /* Replicate halfword to word.  */
++L(aligned):
++	mtcrf	0x01, rLEN
++	ble	cr5, L(medium)
++/* Align to 32-byte boundary.  */
++	andi.	rALIGN, rMEMP, 0x18
++	subfic	rALIGN, rALIGN, 0x20
++	insrdi	rCHR,rCHR,32,0 /* Replicate word to double word. */
++	beq	L(caligned)
++	mtcrf	0x01, rALIGN
++	add	rMEMP, rMEMP, rALIGN
++	sub	rLEN, rLEN, rALIGN
++	cmplwi	cr1, rALIGN, 0x10
++	mr	rMEMP2, rMEMP
++	bf	28, L(a1)
++	stdu	rCHR, -8(rMEMP2)
++L(a1):	blt	cr1, L(a2)
++	std	rCHR, -8(rMEMP2)
++	stdu	rCHR, -16(rMEMP2)
++L(a2):
++
++/* Now aligned to a 32 byte boundary.  */
++L(caligned):
++	cmpldi	cr1, rCHR, 0
++	clrrdi.	rALIGN, rLEN, 5
++	mtcrf	0x01, rLEN
++	beq	cr1, L(zloopstart) /* Special case for clearing memory using dcbz.  */
++L(nondcbz):
++	srdi	rTMP, rALIGN, 5
++	mtctr	rTMP
++	beq	L(medium)	/* We may not actually get to do a full line.  */
++	clrldi.	rLEN, rLEN, 59
++	add	rMEMP, rMEMP, rALIGN
++	li	rNEG64, -0x40
++	bdz	L(cloopdone)
++
++L(c3):	dcbtst	rNEG64, rMEMP
++	std	rCHR, -8(rMEMP)
++	std	rCHR, -16(rMEMP)
++	std	rCHR, -24(rMEMP)
++	stdu	rCHR, -32(rMEMP)
++	bdnz	L(c3)
++L(cloopdone):
++	std	rCHR, -8(rMEMP)
++	std	rCHR, -16(rMEMP)
++	cmpldi	cr1, rLEN, 16
++	std	rCHR, -24(rMEMP)
++	stdu	rCHR, -32(rMEMP)
++	beqlr
++	add	rMEMP, rMEMP, rALIGN
++	b	L(medium_tail2)
++
++	.align 5
++/* Clear lines of memory in 128-byte chunks.  */
++L(zloopstart):
++/* If the remaining length is less the 32 bytes, don't bother getting
++	 the cache line size.  */
++	beq	L(medium)
++	li      rCLS,128  /* cache line size is 128 */
++
++/* Now we know the cache line size, and it is not 32-bytes, but
++	 we may not yet be aligned to the cache line. May have a partial
++	 line to fill, so touch it 1st.  */
++	dcbt	0,rMEMP
++L(getCacheAligned):
++	cmpldi	cr1,rLEN,32
++	andi.	rTMP,rMEMP,127
++	blt		cr1,L(handletail32)
++	beq		L(cacheAligned)
++	addi	rMEMP,rMEMP,32
++	addi	rLEN,rLEN,-32
++	std		rCHR,-32(rMEMP)
++	std		rCHR,-24(rMEMP)
++	std		rCHR,-16(rMEMP)
++	std		rCHR,-8(rMEMP)
++	b		L(getCacheAligned)
++
++/* Now we are aligned to the cache line and can use dcbz.  */
++L(cacheAligned):
++	cmpld	cr1,rLEN,rCLS
++	blt		cr1,L(handletail32)
++	dcbz	0,rMEMP
++	subf	rLEN,rCLS,rLEN
++	add		rMEMP,rMEMP,rCLS
++	b		L(cacheAligned)
++
++/* We are here because the cache line size was set and was not 32-bytes
++   and the remainder (rLEN) is less than the actual cache line size.
++   So set up the preconditions for L(nondcbz) and go there.  */
++L(handletail32):
++	clrrwi.	rALIGN, rLEN, 5
++	b		L(nondcbz)
++
++	.align 5
++L(small):
++/* Memset of 8 bytes or less.  */
++	cmpldi	cr6, rLEN, 4
++	cmpldi	cr5, rLEN, 1
++	ble	cr6,L(le4)
++	subi	rLEN, rLEN, 4
++	stb	rCHR,0(rMEMP)
++	stb	rCHR,1(rMEMP)
++	stb	rCHR,2(rMEMP)
++	stb	rCHR,3(rMEMP)
++	addi	rMEMP,rMEMP, 4
++	cmpldi	cr5, rLEN, 1
++L(le4):
++	cmpldi	cr1, rLEN, 3
++	bltlr	cr5
++	stb	rCHR, 0(rMEMP)
++	beqlr	cr5
++	stb	rCHR, 1(rMEMP)
++	bltlr	cr1
++	stb	rCHR, 2(rMEMP)
++	beqlr	cr1
++	stb	rCHR, 3(rMEMP)
++	blr
++
++/* Memset of 0-31 bytes.  */
++	.align 5
++L(medium):
++	insrdi	rCHR,rCHR,32,0 /* Replicate word to double word.  */
++	cmpldi	cr1, rLEN, 16
++L(medium_tail2):
++	add	rMEMP, rMEMP, rLEN
++L(medium_tail):
++	bt-	31, L(medium_31t)
++	bt-	30, L(medium_30t)
++L(medium_30f):
++	bt-	29, L(medium_29t)
++L(medium_29f):
++	bge-	cr1, L(medium_27t)
++	bflr-	28
++	std	rCHR, -8(rMEMP)
++	blr
++
++L(medium_31t):
++	stbu	rCHR, -1(rMEMP)
++	bf-	30, L(medium_30f)
++L(medium_30t):
++	sthu	rCHR, -2(rMEMP)
++	bf-	29, L(medium_29f)
++L(medium_29t):
++	stwu	rCHR, -4(rMEMP)
++	blt-	cr1, L(medium_27f)
++L(medium_27t):
++	std	rCHR, -8(rMEMP)
++	stdu	rCHR, -16(rMEMP)
++L(medium_27f):
++	bflr-	28
++L(medium_28t):
++	std	rCHR, -8(rMEMP)
++	blr
++END_GEN_TB (BP_SYM (memset),TB_TOCLESS)
++libc_hidden_builtin_def (memset)
++
++/* Copied from bzero.S to prevent the linker from inserting a stub
++   between bzero and memset.  */
++ENTRY (BP_SYM (__bzero))
++	CALL_MCOUNT 3
++#if __BOUNDED_POINTERS__
++	mr	r6,r4
++	li	r5,0
++	mr	r4,r3
++	/* Tell memset that we don't want a return value.  */
++	li	r3,0
++	b	L(_memset)
++#else
++	mr	r5,r4
++	li	r4,0
++	b	L(_memset)
++#endif
++END_GEN_TB (BP_SYM (__bzero),TB_TOCLESS)
++
++weak_alias (BP_SYM (__bzero), BP_SYM (bzero))
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/memcmp.S.jj	2006-09-15 16:40:37.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power4/memcmp.S	2008-01-08 09:43:09.000000000 +0100
+@@ -23,6 +23,7 @@
+ 
+ /* int [r3] memcmp (const char *s1 [r3], const char *s2 [r4], size_t size [r5])  */
+ 
++	.machine power4
+ EALIGN (BP_SYM(memcmp), 4, 0)
+ 	CALL_MCOUNT 3
+ 
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power6/memcpy.S.jj	2006-09-15 16:40:37.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power6/memcpy.S	2008-01-08 09:43:09.000000000 +0100
+@@ -1,5 +1,5 @@
+ /* Optimized memcpy implementation for PowerPC64.
+-   Copyright (C) 2003, 2006 Free Software Foundation, Inc.
++   Copyright (C) 2003, 2006, 2007 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+ 
+    The GNU C Library is free software; you can redistribute it and/or
+@@ -34,48 +34,70 @@
+    Longer moves (>= 32-bytes) justify the effort to get at least the
+    destination doubleword (8-byte) aligned.  Further optimization is
+    posible when both source and destination are doubleword aligned.
+-   Each case has a optimized unrolled loop.   */
++   Each case has a optimized unrolled loop.  
++     
++   For POWER6 unaligned loads will take a 20+ cycle hicup for any
++   L1 cache miss that crosses a 32- or 128-byte boundary.  Store
++   is more forgiving and does not take a hicup until page or 
++   segment boundaries.  So we require doubleword alignment for 
++   the source but may take a risk and only require word alignment
++   for the destination.  */
+ 
+-EALIGN (BP_SYM (memcpy), 5, 0)
++	.machine	"power6"
++EALIGN (BP_SYM (memcpy), 7, 0)
+ 	CALL_MCOUNT 3
+ 
+     cmpldi cr1,5,31
+     neg   0,3
+     std   3,-16(1)
+     std   31,-8(1)
+-    cfi_offset(31,-8)
+     andi. 11,3,7	/* check alignement of dst.  */
+     clrldi 0,0,61	/* Number of bytes until the 1st doubleword of dst.  */
+     clrldi 10,4,61	/* check alignement of src.  */
+     cmpldi cr6,5,8
+     ble-  cr1,.L2	/* If move < 32 bytes use short move code.  */
+-    cmpld cr6,10,11     
+-    mr    12,4
+-    srdi  9,5,3		/* Number of full double words remaining.  */
+     mtcrf 0x01,0
+-    mr    31,5
++    cmpld cr6,10,11  
++    srdi  9,5,3		/* Number of full double words remaining.  */
+     beq   .L0
+   
+-    subf  31,0,5
+-  /* Move 0-7 bytes as needed to get the destination doubleword alligned.  */
++    subf  5,0,5
++  /* Move 0-7 bytes as needed to get the destination doubleword alligned.
++     Duplicate some code to maximize fall-throught and minimize agen delays.  */
+ 1:  bf    31,2f
+-    lbz   6,0(12)
+-    addi  12,12,1
++    lbz   6,0(4)
+     stb   6,0(3)
+-    addi  3,3,1
++    bf    30,5f
++    lhz   6,1(4)
++    sth   6,1(3)
++    bf    29,0f
++    lwz   6,3(4)
++    stw   6,3(3)
++    b     0f
++5:
++    bf    29,0f
++    lwz   6,1(4)
++    stw   6,1(3)
++    b     0f
++    
+ 2:  bf    30,4f
+-    lhz   6,0(12)
+-    addi  12,12,2
++    lhz   6,0(4)
+     sth   6,0(3)
+-    addi  3,3,2
++    bf    29,0f
++    lwz   6,2(4)
++    stw   6,2(3)
++    b     0f
++    
+ 4:  bf    29,0f
+-    lwz   6,0(12)
+-    addi  12,12,4
++    lwz   6,0(4)
+     stw   6,0(3)
+-    addi  3,3,4
+-0:
+-    clrldi 10,12,61	/* check alignement of src again.  */     
+-    srdi  9,31,3	/* Number of full double words remaining.  */
++0: 
++/* Add the number of bytes until the 1st doubleword of dst to src and dst.  */
++    add   4,4,0
++    add   3,3,0
++    
++    clrldi 10,4,61	/* check alignement of src again.  */     
++    srdi  9,5,3	/* Number of full double words remaining.  */
+     
+   /* Copy doublewords from source to destination, assumpting the
+      destination is aligned on a doubleword boundary.
+@@ -87,15 +109,17 @@ EALIGN (BP_SYM (memcpy), 5, 0)
+      
+      Otherwise source and destination are doubleword aligned, and we can
+      the optimized doubleword copy loop.  */
++    .align  4
+ .L0:
+-    clrldi  11,31,61
+-    mtcrf   0x01,9
+-    cmpldi  cr1,11,0
+-    bne-    cr6,.L6   /* If source is not DW aligned.  */
++    clrldi  11,5,61
++    andi.   0,5,0x78
++    srdi    12,5,7	/* Number of 128-byte blocks to move.  */
++    cmpldi  cr1,11,0	/* If the tail is 0 bytes  */
++    bne-    cr6,.L6     /* If source is not DW aligned.  */
+ 
+   /* Move doublewords where destination and source are DW aligned.
+-     Use a unrolled loop to copy 4 doubleword (32-bytes) per iteration.
+-     If the the copy is not an exact multiple of 32 bytes, 1-3 
++     Use a unrolled loop to copy 16 doublewords (128-bytes) per iteration.
++     If the the copy is not an exact multiple of 128 bytes, 1-15
+      doublewords are copied as needed to set up the main loop.  After
+      the main loop exits there may be a tail of 1-7 bytes. These byte
+      are copied a word/halfword/byte at a time as needed to preserve
+@@ -104,66 +128,131 @@ EALIGN (BP_SYM (memcpy), 5, 0)
+      For POWER6 the L1 is store-through and the L2 is store-in.  The
+      L2 is clocked at half CPU clock so we can store 16 bytes every
+      other cycle.  POWER6 also has a load/store bypass so we can do
+-     load, load, store, store every 2 cycles.
++     load, load, store, store every 2 cycles.  
+      
+-     For POWER6 unaligned loads will take a 20+ cycle hicup for any
+-     L1 cache miss that crosses a 32- or 128-byte boundary.  Store
+-     is more forgiving and does not take a hicup until page or 
+-     segment boundaries.  So we require doubleword alignment for 
+-     the source but may take a risk and only require word alignment
+-     for the destination.  */
+-
+-    srdi  8,31,5
+-    cmpldi	cr1,9,4
+-    cmpldi	cr6,11,0
+-    mr    11,12
+-    
+-    bf    30,1f
+-    ld    6,0(12)
+-    ld    7,8(12)
+-    addi  11,12,16
+-    mtctr 8
++     The following code is sensitive to cache line alignment.  Do not
++     make any change with out first making sure thay don't result in
++     splitting ld/std pairs across a cache line.  */
++
++    mtcrf 0x02,5
++    mtcrf 0x01,5
++    cmpldi  cr5,12,1
++    beq   L(das_loop)
++
++    bf    25,4f
++    .align  3
++    ld    6,0(4)
++    ld    7,8(4)
++    mr    11,4
++    mr    10,3
+     std   6,0(3)
+     std   7,8(3)
+-    addi  10,3,16
+-    bf    31,4f
+-    ld    0,16(12)
+-    std   0,16(3)    
+-    blt   cr1,3f
+-    addi  11,12,24
+-    addi  10,3,24
+-    b     4f
+-    .align  4
+-1:
++    ld    6,16(4)
++    ld    7,24(4)
++    std   6,16(3)
++    std   7,24(3)
++    ld    6,0+32(4)
++    ld    7,8+32(4)
++    addi  4,4,64
++    addi  3,3,64
++    std   6,0+32(10)
++    std   7,8+32(10)
++    ld    6,16+32(11)
++    ld    7,24+32(11)
++    std   6,16+32(10)
++    std   7,24+32(10)
++4:
+     mr    10,3
+-    mtctr 8
+-    bf    31,4f
+-    ld    6,0(12)
+-    addi  11,12,8
++    bf    26,2f
++    ld    6,0(4)
++    ld    7,8(4)
++    mr    11,4
++    nop
+     std   6,0(3)
+-    addi  10,3,8
+-    
+-    .align  4
+-4:
+-    ld    6,0(11)
+-    ld    7,8(11)
+-    std   6,0(10)
+-    std   7,8(10)
+-    ld    8,16(11)
+-    ld    0,24(11)
+-    std   8,16(10)
+-    std   0,24(10)
+-    bdz   3f
+-
++    std   7,8(3)
++    ld    6,16(4)
++    ld    7,24(4)
++    addi  4,4,32
++    std   6,16(3)
++    std   7,24(3)
++    addi  3,3,32
++6:
++    nop
++    bf    27,5f
+     ld    6,0+32(11)
+     ld    7,8+32(11)
++    addi  4,4,16
++    addi  3,3,16
+     std   6,0+32(10)
+     std   7,8+32(10)
+-    ld    8,16+32(11)
+-    ld    0,24+32(11)
+-    std   8,16+32(10)
+-    std   0,24+32(10)
+-    bdz   3f
++    bf    28,L(das_loop_s)
++    ld    0,16+32(11)
++    addi  4,4,8
++    addi  3,3,8
++    std   0,16+32(10)
++    blt   cr5,L(das_tail)
++    b     L(das_loop)
++    .align  3
++5:
++    nop
++    bf    28,L(das_loop_s)
++    ld    6,32(11)
++    addi  4,4,8
++    addi  3,3,8
++    std   6,32(10)
++    blt   cr5,L(das_tail)
++    b     L(das_loop)
++    .align  3
++2:
++    mr    11,4
++    bf    27,1f
++    ld    6,0(4)
++    ld    7,8(4)
++    addi  4,4,16
++    addi  3,3,16
++    std   6,0(10)
++    std   7,8(10)
++    bf    28,L(das_loop_s)
++    ld    0,16(11)
++    addi  4,11,24
++    addi  3,10,24
++    std   0,16(10)
++    blt   cr5,L(das_tail)
++    b     L(das_loop)
++    .align  3
++1:
++    nop
++    bf    28,L(das_loop_s)
++    ld    6,0(4)
++    addi  4,4,8
++    addi  3,3,8
++    std   6,0(10)
++L(das_loop_s):
++    nop
++    blt   cr5,L(das_tail)
++    .align  4
++L(das_loop):
++    ld    6,0(4)
++    ld    7,8(4)
++    mr    10,3
++    mr    11,4
++    std   6,0(3)
++    std   7,8(3)
++    addi  12,12,-1
++    nop
++    ld    8,16(4)
++    ld    0,24(4)
++    std   8,16(3)
++    std   0,24(3)
++
++    ld    6,0+32(4)
++    ld    7,8+32(4)
++    std   6,0+32(3)
++    std   7,8+32(3)
++    ld    8,16+32(4)
++    ld    0,24+32(4)
++    std   8,16+32(3)
++    std   0,24+32(3)
+ 
+     ld    6,0+64(11)
+     ld    7,8+64(11)
+@@ -173,46 +262,103 @@ EALIGN (BP_SYM (memcpy), 5, 0)
+     ld    0,24+64(11)
+     std   8,16+64(10)
+     std   0,24+64(10)
+-    bdz   3f
+ 
+     ld    6,0+96(11)
+     ld    7,8+96(11)
++    addi  4,4,128
++    addi  3,3,128
+     std   6,0+96(10)
+     std   7,8+96(10)
+     ld    8,16+96(11)
+     ld    0,24+96(11)
+-    addi  11,11,128
+     std   8,16+96(10)
+     std   0,24+96(10)
+-    addi  10,10,128
+-    bdnz  4b
+-3:
++    ble   cr5,L(das_loop_e)
++    
++    mtctr   12
++    .align  4
++L(das_loop2):
++    ld    6,0(4)
++    ld    7,8(4)
++    mr    10,3
++    mr    11,4
++    std   6,0(3)
++    std   7,8(3)
++    ld    8,16(4)
++    ld    0,24(4)
++    std   8,16(3)
++    std   0,24(3)
++
++    ld    6,0+32(4)
++    ld    7,8+32(4)
++    std   6,0+32(3)
++    std   7,8+32(3)
++    ld    8,16+32(4)
++    ld    0,24+32(4)
++    std   8,16+32(3)
++    std   0,24+32(3)
+ 
+-    rldicr 0,31,0,60
+-    mtcrf 0x01,31
+-    beq   cr6,0f
+-.L9:
+-    add   3,3,0
+-    add   12,12,0
++    ld    6,0+64(11)
++    ld    7,8+64(11)
++    std   6,0+64(10)
++    std   7,8+64(10)
++    ld    8,16+64(11)
++    ld    0,24+64(11)
++    std   8,16+64(10)
++    std   0,24+64(10)
++
++    ld    6,0+96(11)
++    ld    7,8+96(11)
++    addi  4,4,128
++    addi  3,3,128
++    std   6,0+96(10)
++    std   7,8+96(10)
++    ld    8,16+96(11)
++    ld    0,24+96(11)
++    std   8,16+96(10)
++    std   0,24+96(10)
++    bdnz  L(das_loop2)
++L(das_loop_e):
++/* Check of a 1-7 byte tail, return if none.  */
++    bne   cr1,L(das_tail2)
++/* Return original dst pointer.  */
++    ld 3,-16(1)
++    blr
++    .align  4
++L(das_tail):
++    beq   cr1,0f
+     
++L(das_tail2):
+ /*  At this point we have a tail of 0-7 bytes and we know that the
+     destiniation is double word aligned.  */
+ 4:  bf    29,2f
+-    lwz   6,0(12)
+-    addi  12,12,4
++    lwz   6,0(4)
+     stw   6,0(3)
+-    addi  3,3,4
++    bf    30,5f
++    lhz   6,4(4)
++    sth   6,4(3)
++    bf    31,0f
++    lbz   6,6(4)
++    stb   6,6(3)
++    b     0f
++5:  bf    31,0f
++    lbz   6,4(4)
++    stb   6,4(3)
++    b     0f
++  
+ 2:  bf    30,1f
+-    lhz   6,0(12)
+-    addi  12,12,2
++    lhz   6,0(4)
+     sth   6,0(3)
+-    addi  3,3,2
++    bf    31,0f
++    lbz   6,2(4)
++    stb   6,2(3)
++    b     0f
++    
+ 1:  bf    31,0f
+-    lbz   6,0(12)
++    lbz   6,0(4)
+     stb   6,0(3)
+ 0:
+   /* Return original dst pointer.  */
+-    ld 31,-8(1)
+     ld 3,-16(1)
+     blr
+ 
+@@ -340,6 +486,7 @@ L(dus_tail8):  /* Move 8 bytes.  */
+     cmpldi	cr1,10,8
+     cmpldi	cr0,10,12
+     bf    28,L(dus_tail4)
++    .align  2
+     stw   6,0(3)
+     stw   7,4(3)
+ /* Move 4 bytes more.  */
+@@ -424,7 +571,9 @@ L(dus_0):
+ 
+     .align  4
+ .L6:
+-
++    cfi_offset(31,-8)
++    mr    12,4
++    mr    31,5
+   /* Copy doublewords where the destination is aligned but the source is
+      not.  Use aligned doubleword loads from the source, shifted to realign
+      the data, to allow aligned destination stores.  */
+@@ -993,7 +1142,26 @@ L(du7_fini):
+ L(du_done):
+     rldicr 0,31,0,60
+     mtcrf 0x01,31
+-    bne   cr1,.L9	/* If the tail is 0 bytes we are done!  */
++    beq   cr1,0f	/* If the tail is 0 bytes we are done!  */
++
++    add   3,3,0
++    add   12,12,0    
++/*  At this point we have a tail of 0-7 bytes and we know that the
++    destiniation is double word aligned.  */
++4:  bf    29,2f
++    lwz   6,0(12)
++    addi  12,12,4
++    stw   6,0(3)
++    addi  3,3,4
++2:  bf    30,1f
++    lhz   6,0(12)
++    addi  12,12,2
++    sth   6,0(3)
++    addi  3,3,2
++1:  bf    31,0f
++    lbz   6,0(12)
++    stb   6,0(3)
++0:
+   /* Return original dst pointer.  */
+     ld 31,-8(1)
+     ld 3,-16(1)
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power6/memset.S.jj	2008-01-08 09:43:09.000000000 +0100
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc64/power6/memset.S	2008-01-08 09:43:09.000000000 +0100
+@@ -0,0 +1,419 @@
++/* Optimized 64-bit memset implementation for POWER6.
++   Copyright (C) 1997, 1999, 2000, 2002, 2003, 2007
++   Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <sysdep.h>
++#include <bp-sym.h>
++#include <bp-asm.h>
++
++/* __ptr_t [r3] memset (__ptr_t s [r3], int c [r4], size_t n [r5]));
++   Returns 's'.
++
++   The memset is done in three sizes: byte (8 bits), word (32 bits),
++   cache line (256 bits). There is a special case for setting cache lines
++   to 0, to take advantage of the dcbz instruction.  */
++
++	.machine power6
++EALIGN (BP_SYM (memset), 7, 0)
++	CALL_MCOUNT 3
++
++#define rTMP	r0
++#define rRTN	r3	/* Initial value of 1st argument.  */
++#if __BOUNDED_POINTERS__
++# define rMEMP0	r4	/* Original value of 1st arg.  */
++# define rCHR	r5	/* Char to set in each byte.  */
++# define rLEN	r6	/* Length of region to set.  */
++# define rMEMP	r10	/* Address at which we are storing.  */
++#else
++# define rMEMP0	r3	/* Original value of 1st arg.  */
++# define rCHR	r4	/* Char to set in each byte.  */
++# define rLEN	r5	/* Length of region to set.  */
++# define rMEMP	r6	/* Address at which we are storing.  */
++#endif
++#define rALIGN	r7	/* Number of bytes we are setting now (when aligning). */
++#define rMEMP2	r8
++#define rMEMP3	r9	/* Alt mem pointer.  */
++L(_memset):
++#if __BOUNDED_POINTERS__
++	cmpldi	cr1, rRTN, 0
++	CHECK_BOUNDS_BOTH_WIDE (rMEMP0, rTMP, rTMP2, rLEN)
++	beq	cr1, L(b0)
++	STORE_RETURN_VALUE (rMEMP0)
++	STORE_RETURN_BOUNDS (rTMP, rTMP2)
++L(b0):
++#endif
++/* Take care of case for size <= 4.  */
++	cmpldi	cr1, rLEN, 8
++	andi.	rALIGN, rMEMP0, 7
++	mr	rMEMP, rMEMP0
++	ble	cr1, L(small)
++
++/* Align to doubleword boundary.  */
++	cmpldi	cr5, rLEN, 31
++	rlwimi	rCHR, rCHR, 8, 16, 23 /* Replicate byte to halfword.  */
++	beq+	L(aligned2)
++	mtcrf	0x01, rMEMP0
++	subfic	rALIGN, rALIGN, 8
++	cror	28,30,31		/* Detect odd word aligned.  */
++	add	rMEMP, rMEMP, rALIGN
++	sub	rLEN, rLEN, rALIGN
++	rlwimi	rCHR, rCHR, 16, 0, 15 /* Replicate halfword to word.  */
++	bt	29, L(g4)
++/* Process the even word of doubleword.  */
++	bf+	31, L(g2)
++	stb	rCHR, 0(rMEMP0)
++	bt	30, L(g4x)
++L(g2):
++	sth	rCHR, -6(rMEMP)
++L(g4x):
++	stw	rCHR, -4(rMEMP)
++	b	L(aligned)
++/* Process the odd word of doubleword.  */
++L(g4):
++	bf	28, L(g4x) /* If false, word aligned on odd word.  */
++	bf+	31, L(g0)
++	stb	rCHR, 0(rMEMP0)
++	bt	30, L(aligned)
++L(g0):
++	sth	rCHR, -2(rMEMP)
++
++/* Handle the case of size < 31.  */
++L(aligned2):
++	rlwimi	rCHR, rCHR, 16, 0, 15 /* Replicate halfword to word.  */
++L(aligned):
++	mtcrf	0x01, rLEN
++	ble	cr5, L(medium)
++/* Align to 32-byte boundary.  */
++	andi.	rALIGN, rMEMP, 0x18
++	subfic	rALIGN, rALIGN, 0x20
++	insrdi	rCHR,rCHR,32,0 /* Replicate word to double word. */
++	beq	L(caligned)
++	mtcrf	0x01, rALIGN
++	add	rMEMP, rMEMP, rALIGN
++	sub	rLEN, rLEN, rALIGN
++	cmplwi	cr1, rALIGN, 0x10
++	mr	rMEMP2, rMEMP
++	bf	28, L(a1)
++	stdu	rCHR, -8(rMEMP2)
++L(a1):	blt	cr1, L(a2)
++	std	rCHR, -8(rMEMP2)
++	stdu	rCHR, -16(rMEMP2)
++L(a2):
++
++/* Now aligned to a 32 byte boundary.  */
++        .align 4
++L(caligned):
++	cmpldi	cr1, rCHR, 0
++	clrrdi.	rALIGN, rLEN, 5
++	mtcrf	0x01, rLEN
++	beq	cr1, L(zloopstart) /* Special case for clearing memory using dcbz.  */
++	beq	L(medium)	/* We may not actually get to do a full line.  */
++	.align 4
++/* Storing a non-zero "c" value. We are aligned at a sector (32-byte)
++   boundary may not be at cache line (128-byte) boundary.  */
++L(nzloopstart):
++/* memset in 32-byte chunks until we get to a cache line boundary.
++   If rLEN is less then the distance to the next cache-line boundary use
++   cacheAligned1 code to finish the tail.  */
++	cmpldi	cr1,rLEN,128
++
++	andi.	rTMP,rMEMP,127
++	blt	cr1,L(cacheAligned1)
++	addi	rMEMP3,rMEMP,32
++	beq	L(nzCacheAligned)
++	addi	rLEN,rLEN,-32
++	std	rCHR,0(rMEMP)
++	std	rCHR,8(rMEMP)
++	std	rCHR,16(rMEMP)
++	addi	rMEMP,rMEMP,32
++	andi.	rTMP,rMEMP3,127
++	std	rCHR,-8(rMEMP3)
++
++	beq	L(nzCacheAligned)
++	addi	rLEN,rLEN,-32
++	std	rCHR,0(rMEMP3)
++	addi	rMEMP,rMEMP,32
++	std	rCHR,8(rMEMP3)
++	andi.	rTMP,rMEMP,127
++	std	rCHR,16(rMEMP3)
++	std	rCHR,24(rMEMP3)
++
++	beq	L(nzCacheAligned)
++	addi	rLEN,rLEN,-32
++	std	rCHR,32(rMEMP3)
++	addi	rMEMP,rMEMP,32
++	cmpldi	cr1,rLEN,128
++	std	rCHR,40(rMEMP3)
++	cmpldi	cr6,rLEN,256
++	li	rMEMP2,128
++	std	rCHR,48(rMEMP3)
++	std	rCHR,56(rMEMP3)
++	blt	cr1,L(cacheAligned1)
++	b	L(nzCacheAligned128)
++
++/* Now we are aligned to the cache line and can use dcbtst.  */
++        .align 4
++L(nzCacheAligned):
++	cmpldi	cr1,rLEN,128
++	blt	cr1,L(cacheAligned1)
++	b	L(nzCacheAligned128)
++        .align 5
++L(nzCacheAligned128):
++	cmpldi	cr1,rLEN,256
++	addi	rMEMP3,rMEMP,64
++	std	rCHR,0(rMEMP)
++	std	rCHR,8(rMEMP)
++	std	rCHR,16(rMEMP)
++	std	rCHR,24(rMEMP)
++	std	rCHR,32(rMEMP)
++	std	rCHR,40(rMEMP)
++	std	rCHR,48(rMEMP)
++	std	rCHR,56(rMEMP)
++	addi	rMEMP,rMEMP3,64
++	addi	rLEN,rLEN,-128
++	std	rCHR,0(rMEMP3)
++	std	rCHR,8(rMEMP3)
++	std	rCHR,16(rMEMP3)
++	std	rCHR,24(rMEMP3)
++	std	rCHR,32(rMEMP3)
++	std	rCHR,40(rMEMP3)
++	std	rCHR,48(rMEMP3)
++	std	rCHR,56(rMEMP3)
++	bge	cr1,L(nzCacheAligned128)
++	dcbtst	0,rMEMP
++	b	L(cacheAligned1)
++	.align 5
++/* Storing a zero "c" value. We are aligned at a sector (32-byte)
++   boundary but may not be at cache line (128-byte) boundary.  If the
++   remaining length spans a full cache line we can use the Data cache
++   block zero instruction. */
++L(zloopstart):
++/* memset in 32-byte chunks until we get to a cache line boundary.
++   If rLEN is less then the distance to the next cache-line boundary use
++   cacheAligned1 code to finish the tail.  */
++	cmpldi	cr1,rLEN,128
++	beq	L(medium)
++L(getCacheAligned):
++	andi.	rTMP,rMEMP,127
++	nop
++	blt	cr1,L(cacheAligned1)
++	addi	rMEMP3,rMEMP,32
++	beq	L(cacheAligned)
++	addi	rLEN,rLEN,-32
++	std	rCHR,0(rMEMP)
++	std	rCHR,8(rMEMP)
++	std	rCHR,16(rMEMP)
++	addi	rMEMP,rMEMP,32
++	andi.	rTMP,rMEMP3,127
++	std	rCHR,-8(rMEMP3)
++L(getCacheAligned2):
++	beq	L(cacheAligned)
++	addi	rLEN,rLEN,-32
++	std	rCHR,0(rMEMP3)
++	std	rCHR,8(rMEMP3)
++	addi	rMEMP,rMEMP,32
++	andi.	rTMP,rMEMP,127
++	std	rCHR,16(rMEMP3)
++	std	rCHR,24(rMEMP3)
++L(getCacheAligned3):
++	beq	L(cacheAligned)
++	addi	rLEN,rLEN,-32
++	std	rCHR,32(rMEMP3)
++	addi	rMEMP,rMEMP,32
++	cmpldi	cr1,rLEN,128
++	std	rCHR,40(rMEMP3)
++	cmpldi	cr6,rLEN,256
++	li	rMEMP2,128
++	std	rCHR,48(rMEMP3)
++	std	rCHR,56(rMEMP3)
++	blt	cr1,L(cacheAligned1)
++	blt	cr6,L(cacheAligned128)
++	b	L(cacheAlignedx)
++
++/* Now we are aligned to the cache line and can use dcbz.  */
++        .align 5
++L(cacheAligned):
++	cmpldi	cr1,rLEN,128
++	cmpldi	cr6,rLEN,256
++	blt	cr1,L(cacheAligned1)
++	li	rMEMP2,128
++L(cacheAlignedx):
++	cmpldi	cr5,rLEN,640
++	blt	cr6,L(cacheAligned128)
++	bgt	cr5,L(cacheAligned512)
++	cmpldi	cr6,rLEN,512
++	dcbz	0,rMEMP
++	cmpldi	cr1,rLEN,384
++	dcbz	rMEMP2,rMEMP
++	addi	rMEMP,rMEMP,256
++	addi	rLEN,rLEN,-256
++	blt	cr1,L(cacheAligned1)
++	blt	cr6,L(cacheAligned128)
++	b	L(cacheAligned256)
++	.align 5
++/* A simple loop for the longer (>640 bytes) lengths.  This form limits
++   the branch miss-predicted to exactly 1 at loop exit.*/
++L(cacheAligned512):
++	cmpli	cr1,rLEN,128
++	blt	cr1,L(cacheAligned1)
++	dcbz	0,rMEMP
++	addi	rLEN,rLEN,-128
++	addi	rMEMP,rMEMP,128
++	b	L(cacheAligned512)
++        .align 5
++L(cacheAligned256):
++
++	cmpldi	cr6,rLEN,512
++
++	dcbz	0,rMEMP
++	cmpldi	cr1,rLEN,384
++	dcbz	rMEMP2,rMEMP
++	addi	rMEMP,rMEMP,256
++	addi	rLEN,rLEN,-256
++
++	bge	cr6,L(cacheAligned256)
++
++	blt	cr1,L(cacheAligned1)
++        .align 4
++L(cacheAligned128):
++	dcbz	0,rMEMP
++	addi	rMEMP,rMEMP,128
++	addi	rLEN,rLEN,-128
++        nop
++L(cacheAligned1):
++	cmpldi	cr1,rLEN,32
++	blt	cr1,L(handletail32)
++	addi	rMEMP3,rMEMP,32
++	addi	rLEN,rLEN,-32
++	std	rCHR,0(rMEMP)
++	std	rCHR,8(rMEMP)
++	std	rCHR,16(rMEMP)
++	addi	rMEMP,rMEMP,32
++	cmpldi	cr1,rLEN,32
++	std	rCHR,-8(rMEMP3)
++L(cacheAligned2):
++	blt	cr1,L(handletail32)
++	addi	rLEN,rLEN,-32
++	std	rCHR,0(rMEMP3)
++	std	rCHR,8(rMEMP3)
++	addi	rMEMP,rMEMP,32
++	cmpldi	cr1,rLEN,32
++	std	rCHR,16(rMEMP3)
++	std	rCHR,24(rMEMP3)
++	nop
++L(cacheAligned3):
++	blt	cr1,L(handletail32)
++	addi	rMEMP,rMEMP,32
++	addi	rLEN,rLEN,-32
++	std	rCHR,32(rMEMP3)
++	std	rCHR,40(rMEMP3)
++	std	rCHR,48(rMEMP3)
++	std	rCHR,56(rMEMP3)
++
++/* We are here because the length or remainder (rLEN) is less than the
++   cache line/sector size and does not justify aggressive loop unrolling.
++   So set up the preconditions for L(medium) and go there.  */
++        .align 3
++L(handletail32):
++	cmpldi	cr1,rLEN,0
++	beqlr   cr1
++	b	L(medium)
++
++	.align 5
++L(small):
++/* Memset of 8 bytes or less.  */
++	cmpldi	cr6, rLEN, 4
++	cmpldi	cr5, rLEN, 1
++	ble	cr6,L(le4)
++	subi	rLEN, rLEN, 4
++	stb	rCHR,0(rMEMP)
++	stb	rCHR,1(rMEMP)
++	stb	rCHR,2(rMEMP)
++	stb	rCHR,3(rMEMP)
++	addi	rMEMP,rMEMP, 4
++	cmpldi	cr5, rLEN, 1
++L(le4):
++	cmpldi	cr1, rLEN, 3
++	bltlr	cr5
++	stb	rCHR, 0(rMEMP)
++	beqlr	cr5
++	stb	rCHR, 1(rMEMP)
++	bltlr	cr1
++	stb	rCHR, 2(rMEMP)
++	beqlr	cr1
++	stb	rCHR, 3(rMEMP)
++	blr
++
++/* Memset of 0-31 bytes.  */
++	.align 5
++L(medium):
++	insrdi	rCHR,rCHR,32,0 /* Replicate word to double word.  */
++	cmpldi	cr1, rLEN, 16
++L(medium_tail2):
++	add	rMEMP, rMEMP, rLEN
++L(medium_tail):
++	bt-	31, L(medium_31t)
++	bt-	30, L(medium_30t)
++L(medium_30f):
++	bt	29, L(medium_29t)
++L(medium_29f):
++	bge	cr1, L(medium_27t)
++	bflr	28
++	std	rCHR, -8(rMEMP)
++	blr
++
++L(medium_31t):
++	stbu	rCHR, -1(rMEMP)
++	bf-	30, L(medium_30f)
++L(medium_30t):
++	sthu	rCHR, -2(rMEMP)
++	bf-	29, L(medium_29f)
++L(medium_29t):
++	stwu	rCHR, -4(rMEMP)
++	blt	cr1, L(medium_27f)
++L(medium_27t):
++	std	rCHR, -8(rMEMP)
++	stdu	rCHR, -16(rMEMP)
++L(medium_27f):
++	bflr	28
++L(medium_28t):
++	std	rCHR, -8(rMEMP)
++	blr
++END_GEN_TB (BP_SYM (memset),TB_TOCLESS)
++libc_hidden_builtin_def (memset)
++
++/* Copied from bzero.S to prevent the linker from inserting a stub
++   between bzero and memset.  */
++ENTRY (BP_SYM (__bzero))
++	CALL_MCOUNT 3
++#if __BOUNDED_POINTERS__
++	mr	r6,r4
++	li	r5,0
++	mr	r4,r3
++	/* Tell memset that we don't want a return value.  */
++	li	r3,0
++	b	L(_memset)
++#else
++	mr	r5,r4
++	li	r4,0
++	b	L(_memset)
++#endif
++END_GEN_TB (BP_SYM (__bzero),TB_TOCLESS)
++
++weak_alias (BP_SYM (__bzero), BP_SYM (bzero))
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power4/memcpy.S.jj	2006-09-15 16:40:36.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power4/memcpy.S	2008-01-08 09:43:09.000000000 +0100
+@@ -34,6 +34,7 @@
+    possible when both source and destination are word aligned.
+    Each case has an optimized unrolled loop.   */
+ 
++	.machine power4
+ EALIGN (BP_SYM (memcpy), 5, 0)
+ 	CALL_MCOUNT
+ 
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power4/memset.S.jj	2006-09-15 16:40:36.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power4/memset.S	2008-01-08 09:43:09.000000000 +0100
+@@ -28,6 +28,7 @@
+    cache line (1024 bits). There is a special case for setting cache lines
+    to 0, to take advantage of the dcbz instruction.  */
+ 
++	.machine power4
+ EALIGN (BP_SYM (memset), 5, 0)
+ 	CALL_MCOUNT
+ 
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power4/memcmp.S.jj	2006-09-15 16:40:36.000000000 +0200
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power4/memcmp.S	2008-01-08 09:43:09.000000000 +0100
+@@ -23,6 +23,7 @@
+ 
+ /* int [r3] memcmp (const char *s1 [r3], const char *s2 [r4], size_t size [r5])  */
+ 
++	.machine power4
+ EALIGN (BP_SYM(memcmp), 4, 0)
+ 	CALL_MCOUNT
+ 
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/memcpy.S.jj	2008-01-05 19:23:52.000000000 +0100
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/memcpy.S	2008-01-08 09:43:09.000000000 +0100
+@@ -34,6 +34,7 @@
+    possible when both source and destination are word aligned.
+    Each case has an optimized unrolled loop.   */
+ 
++	.machine power6
+ EALIGN (BP_SYM (memcpy), 5, 0)
+ 	CALL_MCOUNT
+ 
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/memset.S.jj	2008-01-08 09:43:09.000000000 +0100
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/memset.S	2008-01-08 09:43:09.000000000 +0100
+@@ -0,0 +1,542 @@
++/* Optimized 32-bit memset implementation for POWER6.
++   Copyright (C) 1997,99, 2000,02,03,06,2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA
++   02110-1301 USA.  */
++
++#include <sysdep.h>
++#include <bp-sym.h>
++#include <bp-asm.h>
++
++/* __ptr_t [r3] memset (__ptr_t s [r3], int c [r4], size_t n [r5]));
++   Returns 's'.
++
++   The memset is done in three sizes: byte (8 bits), word (32 bits),
++   cache line (1024 bits). There is a special case for setting cache lines
++   to 0, to take advantage of the dcbz instruction.  */
++
++	.machine power6
++EALIGN (BP_SYM (memset), 7, 0)
++	CALL_MCOUNT
++
++#define rTMP	r0
++#define rRTN	r3	/* Initial value of 1st argument.  */
++#define rMEMP0	r3	/* Original value of 1st arg.  */
++#define rCHR	r4	/* Char to set in each byte.  */
++#define rLEN	r5	/* Length of region to set.  */
++#define rMEMP	r6	/* Address at which we are storing.  */
++#define rALIGN	r7	/* Number of bytes we are setting now (when aligning). */
++#define rMEMP2	r8
++
++#define rNEG64	r8	/* Constant -64 for clearing with dcbz.  */
++#define rMEMP3	r9	/* Alt mem pointer.  */
++L(_memset):
++/* Take care of case for size <= 4.  */
++	cmplwi	cr1, rLEN, 4
++	andi.	rALIGN, rMEMP0, 3
++	mr	rMEMP, rMEMP0
++	ble-	cr1, L(small)
++/* Align to word boundary.  */
++	cmplwi	cr5, rLEN, 31
++	rlwimi	rCHR, rCHR, 8, 16, 23 /* Replicate byte to halfword.  */
++	beq+	L(aligned)
++	mtcrf	0x01, rMEMP0
++	subfic	rALIGN, rALIGN, 4
++	add	rMEMP, rMEMP, rALIGN
++	sub	rLEN, rLEN, rALIGN
++	bf+	31, L(g0)
++	stb	rCHR, 0(rMEMP0)
++	bt	30, L(aligned)
++L(g0):
++	sth	rCHR, -2(rMEMP)
++
++        .align 4
++/* Handle the case of size < 31.  */
++L(aligned):
++	mtcrf	0x01, rLEN
++	rlwimi	rCHR, rCHR, 16, 0, 15 /* Replicate halfword to word.  */
++	ble	cr5, L(medium)
++/* Align to 32-byte boundary.  */
++	andi.	rALIGN, rMEMP, 0x1C
++	subfic	rALIGN, rALIGN, 0x20
++	beq	L(caligned)
++	mtcrf	0x01, rALIGN
++	add	rMEMP, rMEMP, rALIGN
++	sub	rLEN, rLEN, rALIGN
++	cmplwi	cr1, rALIGN, 0x10
++	mr	rMEMP2, rMEMP
++	bf	28, L(a1)
++        stw     rCHR, -4(rMEMP2)
++	stwu	rCHR, -8(rMEMP2)
++	nop
++L(a1):	blt	cr1, L(a2)
++        stw     rCHR, -4(rMEMP2)
++	stw	rCHR, -8(rMEMP2)
++	stw	rCHR, -12(rMEMP2)
++	stwu	rCHR, -16(rMEMP2)
++L(a2):  bf      29, L(caligned)
++        stw     rCHR, -4(rMEMP2)
++
++        .align 3
++/* Now aligned to a 32 byte boundary.  */
++L(caligned):
++	cmplwi	cr1, rCHR, 0
++	clrrwi.	rALIGN, rLEN, 5
++	mtcrf	0x01, rLEN
++	beq	cr1, L(zloopstart) /* Special case for clearing memory using dcbz.  */
++L(nondcbz):
++	beq	L(medium)	/* We may not actually get to do a full line.  */
++	nop
++/* Storing a non-zero "c" value. We are aligned at a sector (32-byte)
++   boundary may not be at cache line (128-byte) boundary.  */
++L(nzloopstart):
++/* memset in 32-byte chunks until we get to a cache line boundary.
++   If rLEN is less then the distance to the next cache-line boundary use
++   cacheAligned1 code to finish the tail.  */
++	cmplwi	cr1,rLEN,128
++
++	andi.	rTMP,rMEMP,127
++	blt	cr1,L(cacheAligned1)
++	addi	rMEMP3,rMEMP,32
++	beq	L(nzCacheAligned)
++	addi	rLEN,rLEN,-32
++	stw	rCHR,0(rMEMP)
++        stw     rCHR,4(rMEMP)
++	stw	rCHR,8(rMEMP)
++	stw     rCHR,12(rMEMP)
++	stw	rCHR,16(rMEMP)
++        stw     rCHR,20(rMEMP)
++	addi	rMEMP,rMEMP,32
++	andi.	rTMP,rMEMP3,127
++	stw	rCHR,-8(rMEMP3)
++        stw     rCHR,-4(rMEMP3)
++
++	beq	L(nzCacheAligned)
++	addi	rLEN,rLEN,-32
++	stw	rCHR,0(rMEMP3)
++        stw     rCHR,4(rMEMP3)
++	addi	rMEMP,rMEMP,32
++	stw	rCHR,8(rMEMP3)
++	stw     rCHR,12(rMEMP3)
++	andi.	rTMP,rMEMP,127
++	stw	rCHR,16(rMEMP3)
++        stw     rCHR,20(rMEMP3)
++	stw	rCHR,24(rMEMP3)
++        stw     rCHR,28(rMEMP3)
++
++	beq	L(nzCacheAligned)
++	addi	rLEN,rLEN,-32
++/* At this point we can overrun the store queue (pipe reject) so it is
++   time to slow things down. The store queue can merge two adjacent
++   stores into a single L1/L2 op, but the L2 is clocked at 1/2 the CPU.
++   So we add "group ending nops" to guarantee that we dispatch only two
++   stores every other cycle. */
++	ori	r1,r1,0
++	ori	r1,r1,0
++	stw	rCHR,32(rMEMP3)
++        stw     rCHR,36(rMEMP3)
++	addi	rMEMP,rMEMP,32
++	cmplwi	cr1,rLEN,128
++	ori	r1,r1,0
++	ori	r1,r1,0
++	stw	rCHR,40(rMEMP3)
++	stw     rCHR,44(rMEMP3)
++	ori	r1,r1,0
++	ori	r1,r1,0
++	stw	rCHR,48(rMEMP3)
++        stw     rCHR,52(rMEMP3)
++	ori	r1,r1,0
++	ori	r1,r1,0
++	stw	rCHR,56(rMEMP3)
++        stw     rCHR,60(rMEMP3)
++	blt	cr1,L(cacheAligned1)
++	b	L(nzCacheAligned)
++
++/* Now we are aligned to the cache line and can use dcbtst.  */
++        .align 5
++L(nzCacheAligned):
++	cmplwi	cr1,rLEN,128
++	cmplwi	cr6,rLEN,256
++	blt	cr1,L(cacheAligned1)
++	blt	cr6,L(nzCacheAligned128)
++        .align 4
++L(nzCacheAligned128):
++	nop
++	addi	rMEMP3,rMEMP,64
++	stw	rCHR,0(rMEMP)
++        stw     rCHR,4(rMEMP)
++	stw	rCHR,8(rMEMP)
++	stw     rCHR,12(rMEMP)
++	stw	rCHR,16(rMEMP)
++        stw     rCHR,20(rMEMP)
++	stw	rCHR,24(rMEMP)
++        stw     rCHR,28(rMEMP)
++	stw	rCHR,32(rMEMP)
++        stw     rCHR,36(rMEMP)
++	stw	rCHR,40(rMEMP)
++	stw     rCHR,44(rMEMP)
++	stw	rCHR,48(rMEMP)
++        stw     rCHR,52(rMEMP)
++	stw	rCHR,56(rMEMP)
++        stw     rCHR,60(rMEMP)
++	addi	rMEMP,rMEMP3,64
++	addi	rLEN,rLEN,-128
++/* At this point we can overrun the store queue (pipe reject) so it is
++   time to slow things down. The store queue can merge two adjacent
++   stores into a single L1/L2 op, but the L2 is clocked at 1/2 the CPU.
++   So we add "group ending nops" to guarantee that we dispatch only one
++   store per cycle. */
++	stw	rCHR,0(rMEMP3)
++	ori	r1,r1,0
++        stw     rCHR,4(rMEMP3)
++	ori	r1,r1,0
++	stw	rCHR,8(rMEMP3)
++	ori	r1,r1,0
++	stw     rCHR,12(rMEMP3)
++	ori	r1,r1,0
++	stw	rCHR,16(rMEMP3)
++	ori	r1,r1,0
++        stw     rCHR,20(rMEMP3)
++	ori	r1,r1,0
++	stw	rCHR,24(rMEMP3)
++	ori	r1,r1,0
++        stw     rCHR,28(rMEMP3)
++	ori	r1,r1,0
++	stw	rCHR,32(rMEMP3)
++	ori	r1,r1,0
++        stw     rCHR,36(rMEMP3)
++	ori	r1,r1,0
++	stw	rCHR,40(rMEMP3)
++	ori	r1,r1,0
++	stw     rCHR,44(rMEMP3)
++	ori	r1,r1,0
++	stw	rCHR,48(rMEMP3)
++	ori	r1,r1,0
++        stw     rCHR,52(rMEMP3)
++	ori	r1,r1,0
++	stw	rCHR,56(rMEMP3)
++	ori	r1,r1,0
++        stw     rCHR,60(rMEMP3)
++	blt	cr6,L(cacheAligned1)
++#ifndef NOT_IN_libc
++	lfd	0,-128(rMEMP)
++#endif
++	b	L(nzCacheAligned256)
++        .align 5
++L(nzCacheAligned256):
++	cmplwi	cr1,rLEN,256
++	addi	rMEMP3,rMEMP,64
++#ifdef NOT_IN_libc
++/* When we are not in libc we should use only GPRs to avoid the FPU lock 
++   interrupt.  */
++	stw	rCHR,0(rMEMP)
++        stw     rCHR,4(rMEMP)
++	stw	rCHR,8(rMEMP)
++	stw     rCHR,12(rMEMP)
++	stw	rCHR,16(rMEMP)
++        stw     rCHR,20(rMEMP)
++	stw	rCHR,24(rMEMP)
++        stw     rCHR,28(rMEMP)
++	stw	rCHR,32(rMEMP)
++        stw     rCHR,36(rMEMP)
++	stw	rCHR,40(rMEMP)
++	stw     rCHR,44(rMEMP)
++	stw	rCHR,48(rMEMP)
++        stw     rCHR,52(rMEMP)
++	stw	rCHR,56(rMEMP)
++        stw     rCHR,60(rMEMP)
++	addi	rMEMP,rMEMP3,64
++	addi	rLEN,rLEN,-128
++	stw	rCHR,0(rMEMP3)
++        stw     rCHR,4(rMEMP3)
++	stw	rCHR,8(rMEMP3)
++	stw     rCHR,12(rMEMP3)
++	stw	rCHR,16(rMEMP3)
++        stw     rCHR,20(rMEMP3)
++	stw	rCHR,24(rMEMP3)
++        stw     rCHR,28(rMEMP3)
++	stw	rCHR,32(rMEMP3)
++        stw     rCHR,36(rMEMP3)
++	stw	rCHR,40(rMEMP3)
++	stw     rCHR,44(rMEMP3)
++	stw	rCHR,48(rMEMP3)
++        stw     rCHR,52(rMEMP3)
++	stw	rCHR,56(rMEMP3)
++        stw     rCHR,60(rMEMP3)
++#else
++/* We are in libc and this is a long memset so we can use FPRs and can afford
++   occasional FPU locked interrupts.  */
++	stfd	0,0(rMEMP)
++	stfd	0,8(rMEMP)
++	stfd	0,16(rMEMP)
++	stfd	0,24(rMEMP)
++	stfd	0,32(rMEMP)
++	stfd	0,40(rMEMP)
++	stfd	0,48(rMEMP)
++	stfd	0,56(rMEMP)
++	addi	rMEMP,rMEMP3,64
++	addi	rLEN,rLEN,-128
++	stfd	0,0(rMEMP3)
++	stfd	0,8(rMEMP3)
++	stfd	0,16(rMEMP3)
++	stfd	0,24(rMEMP3)
++	stfd	0,32(rMEMP3)
++	stfd	0,40(rMEMP3)
++	stfd	0,48(rMEMP3)
++	stfd	0,56(rMEMP3)
++#endif
++	bge	cr1,L(nzCacheAligned256)
++	dcbtst	0,rMEMP
++	b	L(cacheAligned1)
++
++	.align 4
++/* Storing a zero "c" value. We are aligned at a sector (32-byte)
++   boundary but may not be at cache line (128-byte) boundary.  If the
++   remaining length spans a full cache line we can use the Data cache
++   block zero instruction. */
++L(zloopstart):
++/* memset in 32-byte chunks until we get to a cache line boundary.
++   If rLEN is less then the distance to the next cache-line boundary use
++   cacheAligned1 code to finish the tail.  */
++	cmplwi	cr1,rLEN,128
++	beq	L(medium)
++L(getCacheAligned):
++	andi.	rTMP,rMEMP,127
++	blt	cr1,L(cacheAligned1)
++	addi	rMEMP3,rMEMP,32
++	beq	L(cacheAligned)
++	addi	rLEN,rLEN,-32
++	stw	rCHR,0(rMEMP)
++        stw     rCHR,4(rMEMP)
++	stw	rCHR,8(rMEMP)
++	stw     rCHR,12(rMEMP)
++	stw	rCHR,16(rMEMP)
++        stw     rCHR,20(rMEMP)
++	addi	rMEMP,rMEMP,32
++	andi.	rTMP,rMEMP3,127
++	stw	rCHR,-8(rMEMP3)
++        stw     rCHR,-4(rMEMP3)
++L(getCacheAligned2):
++	beq	L(cacheAligned)
++	addi	rLEN,rLEN,-32
++	addi	rMEMP,rMEMP,32
++	stw	rCHR,0(rMEMP3)
++        stw     rCHR,4(rMEMP3)
++	stw	rCHR,8(rMEMP3)
++	stw     rCHR,12(rMEMP3)
++	andi.	rTMP,rMEMP,127
++	nop
++	stw	rCHR,16(rMEMP3)
++        stw     rCHR,20(rMEMP3)
++	stw	rCHR,24(rMEMP3)
++        stw     rCHR,28(rMEMP3)
++L(getCacheAligned3):
++	beq	L(cacheAligned)
++/* At this point we can overrun the store queue (pipe reject) so it is
++   time to slow things down. The store queue can merge two adjacent
++   stores into a single L1/L2 op, but the L2 is clocked at 1/2 the CPU.
++   So we add "group ending nops" to guarantee that we dispatch only two
++   stores every other cycle. */
++	addi	rLEN,rLEN,-32
++	ori	r1,r1,0
++	ori	r1,r1,0
++	stw	rCHR,32(rMEMP3)
++        stw     rCHR,36(rMEMP3)
++	addi	rMEMP,rMEMP,32
++	cmplwi	cr1,rLEN,128
++	ori	r1,r1,0
++	stw	rCHR,40(rMEMP3)
++	stw     rCHR,44(rMEMP3)
++	cmplwi	cr6,rLEN,256
++	li	rMEMP2,128
++	ori	r1,r1,0
++	stw	rCHR,48(rMEMP3)
++        stw     rCHR,52(rMEMP3)
++	ori	r1,r1,0
++	ori	r1,r1,0
++	stw	rCHR,56(rMEMP3)
++        stw     rCHR,60(rMEMP3)
++	blt	cr1,L(cacheAligned1)
++	blt	cr6,L(cacheAligned128)
++	b	L(cacheAlignedx)
++
++/* Now we are aligned to the cache line and can use dcbz.  */
++        .align 4
++L(cacheAligned):
++	cmplwi	cr1,rLEN,128
++	cmplwi	cr6,rLEN,256
++	blt	cr1,L(cacheAligned1)
++	li	rMEMP2,128
++L(cacheAlignedx):
++	cmpldi	cr5,rLEN,640
++	blt	cr6,L(cacheAligned128)
++	bgt	cr5,L(cacheAligned512)
++	cmplwi	cr6,rLEN,512
++	dcbz	0,rMEMP
++	cmplwi	cr1,rLEN,384
++	dcbz	rMEMP2,rMEMP
++	addi	rMEMP,rMEMP,256
++	addi	rLEN,rLEN,-256
++	blt	cr1,L(cacheAligned1)
++	blt	cr6,L(cacheAligned128)
++	b	L(cacheAligned256)
++	.align 5
++/* A simple loop for the longer (>640 bytes) lengths.  This form limits
++   the branch miss-predicted to exactly 1 at loop exit.*/
++L(cacheAligned512):
++	cmpli	cr1,rLEN,128
++	blt	cr1,L(cacheAligned1)
++	dcbz	0,rMEMP
++	addi	rLEN,rLEN,-128
++	addi	rMEMP,rMEMP,128
++	b	L(cacheAligned512)
++        .align 5
++L(cacheAligned256):
++	cmplwi	cr6,rLEN,512
++	dcbz	0,rMEMP
++	cmplwi	cr1,rLEN,384
++	dcbz	rMEMP2,rMEMP
++	addi	rMEMP,rMEMP,256
++	addi	rLEN,rLEN,-256
++	bge	cr6,L(cacheAligned256)
++	blt	cr1,L(cacheAligned1)
++        .align 4
++L(cacheAligned128):
++	dcbz	0,rMEMP
++	addi	rMEMP,rMEMP,128
++	addi	rLEN,rLEN,-128
++        .align 4
++L(cacheAligned1):
++	cmplwi	cr1,rLEN,32
++	blt	cr1,L(handletail32)
++	addi	rMEMP3,rMEMP,32
++	addi	rLEN,rLEN,-32
++	stw	rCHR,0(rMEMP)
++        stw     rCHR,4(rMEMP)
++	stw	rCHR,8(rMEMP)
++	stw     rCHR,12(rMEMP)
++	stw	rCHR,16(rMEMP)
++        stw     rCHR,20(rMEMP)
++	addi	rMEMP,rMEMP,32
++	cmplwi	cr1,rLEN,32
++	stw	rCHR,-8(rMEMP3)
++        stw     rCHR,-4(rMEMP3)
++L(cacheAligned2):
++	blt	cr1,L(handletail32)
++	addi	rLEN,rLEN,-32
++	stw	rCHR,0(rMEMP3)
++        stw     rCHR,4(rMEMP3)
++	stw	rCHR,8(rMEMP3)
++	stw     rCHR,12(rMEMP3)
++	addi	rMEMP,rMEMP,32
++	cmplwi	cr1,rLEN,32
++	stw	rCHR,16(rMEMP3)
++        stw     rCHR,20(rMEMP3)
++	stw	rCHR,24(rMEMP3)
++        stw     rCHR,28(rMEMP3)
++	nop
++L(cacheAligned3):
++	blt	cr1,L(handletail32)
++/* At this point we can overrun the store queue (pipe reject) so it is
++   time to slow things down. The store queue can merge two adjacent
++   stores into a single L1/L2 op, but the L2 is clocked at 1/2 the CPU.
++   So we add "group ending nops" to guarantee that we dispatch only two
++   stores every other cycle. */
++	ori	r1,r1,0
++	ori	r1,r1,0
++	addi	rMEMP,rMEMP,32
++	addi	rLEN,rLEN,-32
++	ori	r1,r1,0
++	ori	r1,r1,0
++	stw	rCHR,32(rMEMP3)
++        stw     rCHR,36(rMEMP3)
++	ori	r1,r1,0
++	ori	r1,r1,0
++	stw	rCHR,40(rMEMP3)
++	stw     rCHR,44(rMEMP3)
++	ori	r1,r1,0
++	ori	r1,r1,0
++	stw	rCHR,48(rMEMP3)
++        stw     rCHR,52(rMEMP3)
++	ori	r1,r1,0
++	ori	r1,r1,0
++	stw	rCHR,56(rMEMP3)
++        stw     rCHR,60(rMEMP3)
++
++/* We are here because the length or remainder (rLEN) is less than the
++   cache line/sector size and does not justify aggressive loop unrolling.
++   So set up the preconditions for L(medium) and go there.  */
++        .align 3
++L(handletail32):
++	cmplwi	cr1,rLEN,0
++	beqlr   cr1
++	b	L(medium)
++
++	.align 4
++L(small):
++/* Memset of 4 bytes or less.  */
++	cmplwi	cr5, rLEN, 1
++	cmplwi	cr1, rLEN, 3
++	bltlr	cr5
++	stb	rCHR, 0(rMEMP)
++	beqlr	cr5
++	stb	rCHR, 1(rMEMP)
++	bltlr	cr1
++	stb	rCHR, 2(rMEMP)
++	beqlr	cr1
++	stb	rCHR, 3(rMEMP)
++	blr
++
++/* Memset of 0-31 bytes.  */
++	.align 5
++L(medium):
++	cmplwi	cr1, rLEN, 16
++L(medium_tail2):
++	add	rMEMP, rMEMP, rLEN
++L(medium_tail):
++	bt-	31, L(medium_31t)
++	bt-	30, L(medium_30t)
++L(medium_30f):
++	bt	29, L(medium_29t)
++L(medium_29f):
++	bge	cr1, L(medium_27t)
++	bflr	28
++        stw     rCHR, -4(rMEMP)
++	stw	rCHR, -8(rMEMP)
++	blr
++
++L(medium_31t):
++	stbu	rCHR, -1(rMEMP)
++	bf-	30, L(medium_30f)
++L(medium_30t):
++	sthu	rCHR, -2(rMEMP)
++	bf-	29, L(medium_29f)
++L(medium_29t):
++	stwu	rCHR, -4(rMEMP)
++	blt	cr1, L(medium_27f)
++L(medium_27t):
++        stw     rCHR, -4(rMEMP)
++	stw	rCHR, -8(rMEMP)
++        stw     rCHR, -12(rMEMP)
++	stwu	rCHR, -16(rMEMP)
++L(medium_27f):
++	bflr	28
++L(medium_28t):
++        stw     rCHR, -4(rMEMP)
++	stw	rCHR, -8(rMEMP)
++	blr
++END (BP_SYM (memset))
++libc_hidden_builtin_def (memset)
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_llrint.S.jj	2008-01-08 09:43:09.000000000 +0100
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_llrint.S	2008-01-08 09:43:09.000000000 +0100
+@@ -0,0 +1,47 @@
++/* Round double to long int.  PowerPC32 on PowerPC64 version.
++   Copyright (C) 2004, 2006, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA
++   02110-1301 USA.  */
++
++#include <sysdep.h>
++#include <math_ldbl_opt.h>
++
++/* long long int[r3, r4] __llrint (double x[fp1])  */
++ENTRY (__llrint)	
++	CALL_MCOUNT
++	stwu	r1,-16(r1)
++	cfi_adjust_cfa_offset (16)
++	fctid	fp13,fp1
++	stfd	fp13,8(r1)
++/* Insure the following load is in a different dispatch group by
++   inserting "group ending nop".  */
++	ori	r1,r1,0
++	lwz	r3,8(r1)
++	lwz	r4,12(r1)
++	addi	r1,r1,16	
++	blr
++	END (__llrint)
++
++weak_alias (__llrint, llrint)
++
++#ifdef NO_LONG_DOUBLE
++strong_alias (__llrint, __llrintl)
++weak_alias (__llrint, llrintl)
++#endif
++#if LONG_DOUBLE_COMPAT(libm, GLIBC_2_1)
++compat_symbol (libm, __llrint, llrintl, GLIBC_2_1)
++#endif
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_llroundf.S.jj	2008-01-08 09:43:09.000000000 +0100
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_llroundf.S	2008-01-08 09:43:09.000000000 +0100
+@@ -0,0 +1,2 @@
++/* __llroundf is in s_llround.S  */
++/* __llroundf is in s_llround.S  */
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_llround.S.jj	2008-01-08 09:43:09.000000000 +0100
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_llround.S	2008-01-08 09:43:09.000000000 +0100
+@@ -0,0 +1,60 @@
++/* lround function.  POWER5+, PowerPC32 version.
++   Copyright (C) 2006, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 1 Franklin Street, Fifth Floor, Boston MA
++   02110-1301 USA.  */
++
++#include <sysdep.h>
++#include <math_ldbl_opt.h>
++	
++/* long [r3] llround (float x [fp1])
++   IEEE 1003.1 lround function.  IEEE specifies "round to the nearest 
++   integer value, rounding halfway cases away from zero, regardless of
++   the current rounding mode."  However PowerPC Architecture defines
++   "round to Nearest" as "Choose the best approximation. In case of a 
++   tie, choose the one that is even (least significant bit o).". 
++   So we pre-round using the V2.02 Floating Round to Integer Nearest
++   instruction before we use the Floating Convert to Integer Word with
++   round to zero instruction.  */
++
++	.machine	"power5"
++ENTRY (__llround)
++	stwu    r1,-16(r1)
++	cfi_adjust_cfa_offset (16)
++	frin	fp2,fp1
++	fctidz	fp3,fp2		/* Convert To Integer Word lround toward 0.  */
++	stfd	fp3,8(r1)
++/* Insure the following load is in a different dispatch group by
++   inserting "group ending nop".  */
++	ori	r1,r1,0
++	lwz	r4,12(r1)
++	lwz	r3,8(r1)
++	addi	r1,r1,16
++	blr
++	END (__llround)
++
++weak_alias (__llround, llround)
++
++strong_alias (__llround, __llroundf)
++weak_alias (__llround, llroundf)
++
++#ifdef NO_LONG_DOUBLE
++weak_alias (__llround, llroundl)
++strong_alias (__llround, __llroundl)
++#endif
++#if LONG_DOUBLE_COMPAT(libm, GLIBC_2_1)
++compat_symbol (libm, __llround, llroundl, GLIBC_2_1)
++#endif
+--- libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_llrintf.S.jj	2008-01-08 09:43:09.000000000 +0100
++++ libc/powerpc-cpu/sysdeps/powerpc/powerpc32/power6/fpu/s_llrintf.S	2008-01-08 09:43:09.000000000 +0100
+@@ -0,0 +1,39 @@
++/* Round float to long int.  PowerPC32 on PowerPC64 version.
++   Copyright (C) 2004, 2006, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA
++   02110-1301 USA.  */
++
++#include <sysdep.h>
++
++/* long long int[r3, r4] __llrintf (float x[fp1])  */
++ENTRY (__llrintf)	
++	CALL_MCOUNT
++	stwu	r1,-16(r1)
++	cfi_adjust_cfa_offset (16)
++	fctid	fp13,fp1
++	stfd	fp13,8(r1)
++/* Insure the following load is in a different dispatch group by
++   inserting "group ending nop".  */
++	ori	r1,r1,0
++	lwz	r3,8(r1)
++	lwz	r4,12(r1)
++	addi	r1,r1,16	
++	blr
++	END (__llrintf)
++
++weak_alias (__llrintf, llrintf)
++

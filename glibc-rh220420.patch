@@ -1,0 +1,62 @@
+2006-12-21  Ulrich Drepper  <drepper@redhat.com>
+
+	* include/atomic.h (atomic_forced_read): New macro.
+nptl/
+2006-12-21  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/unix/sysv/linux/pthread_kill.c (pthread_kill): Make sure
+	tid isn't reread from pd->tid in between ESRCH test and the syscall.
+
+--- libc/include/atomic.h	18 Oct 2006 19:02:53 -0000	1.20
++++ libc/include/atomic.h	21 Dec 2006 21:44:00 -0000	1.21
+@@ -497,6 +497,12 @@
+ #endif
+ 
+ 
++#ifndef atomic_forced_read
++# define atomic_forced_read(x) \
++  ({ __typeof (x) __x; __asm ("" : "=r" (__x) : "0" (x)); __x; })
++#endif
++
++
+ #ifndef atomic_delay
+ # define atomic_delay() do { /* nothing */ } while (0)
+ #endif
+--- libc/nptl/sysdeps/unix/sysv/linux/pthread_kill.c	28 Sep 2004 22:22:37 -0000	1.12
++++ libc/nptl/sysdeps/unix/sysv/linux/pthread_kill.c	22 Dec 2006 00:35:21 -0000	1.14
+@@ -33,7 +33,15 @@ __pthread_kill (threadid, signo)
+   struct pthread *pd = (struct pthread *) threadid;
+ 
+   /* Make sure the descriptor is valid.  */
+-  if (INVALID_TD_P (pd))
++  if (DEBUGGING_P && INVALID_TD_P (pd))
++    /* Not a valid thread handle.  */
++    return ESRCH;
++
++  /* Force load of pd->tid into local variable or register.  Otherwise
++     if a thread exits between ESRCH test and tgkill, we might return
++     EINVAL, because pd->tid would be cleared by the kernel.  */
++  pid_t tid = atomic_forced_read (pd->tid);
++  if (__builtin_expect (tid <= 0, 0))
+     /* Not a valid thread handle.  */
+     return ESRCH;
+ 
+@@ -53,15 +61,15 @@ __pthread_kill (threadid, signo)
+   int val;
+ #if __ASSUME_TGKILL
+   val = INTERNAL_SYSCALL (tgkill, err, 3, THREAD_GETMEM (THREAD_SELF, pid),
+-			  pd->tid, signo);
++			  tid, signo);
+ #else
+ # ifdef __NR_tgkill
+   val = INTERNAL_SYSCALL (tgkill, err, 3, THREAD_GETMEM (THREAD_SELF, pid),
+-			  pd->tid, signo);
++			  tid, signo);
+   if (INTERNAL_SYSCALL_ERROR_P (val, err)
+       && INTERNAL_SYSCALL_ERRNO (val, err) == ENOSYS)
+ # endif
+-    val = INTERNAL_SYSCALL (tkill, err, 2, pd->tid, signo);
++    val = INTERNAL_SYSCALL (tkill, err, 2, tid, signo);
+ #endif
+ 
+   return (INTERNAL_SYSCALL_ERROR_P (val, err)

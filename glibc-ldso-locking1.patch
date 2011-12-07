@@ -1,0 +1,1958 @@
+2007-06-09  Ulrich Drepper  <drepper@redhat.com>
+
+	* elf/do-lookup.h (do_lookup_x): Read r_nlist before r_list and
+	make sure gcc doesn't mess around with this.
+
+2007-06-08  Ulrich Drepper  <drepper@redhat.com>
+
+	* elf/dl-lookup.c (_dl_lookup_symbol_x): Remove use of r_nlist.
+
+2007-06-08  Jakub Jelinek  <jakub@redhat.com>
+
+	* elf/dl-close.c (_dl_close_worker): Remove all to be removed
+	libraries from the global scope at once and call THREAD_GSCOPE_WAIT
+	at most once per _dl_close_worker.
+
+2007-05-18  Ulrich Drepper  <drepper@redhat.com>
+
+	* elf/dl-close.c (_dl_close_worker): When removing object from
+	global scope, wait for all lookups to finish afterwards.
+	* elf/dl-open.c (add_to_global): When global scope array must
+	grow, allocate a new one and free old array only after all
+	lookups finish.
+	* elf/dl-runtime.c (_dl_fixup): Protect using global scope.
+	(_dl_lookup_symbol_x): Likewise.
+	* elf/dl-support.c: Define _dl_wait_lookup_done.
+	* sysdeps/generic/ldsodefs.h (struct rtld_global): Add
+	_dl_wait_lookup_done.
+
+2007-05-11  Ulrich Drepper  <drepper@redhat.com>
+
+	* elf/dl-close.c (_dl_close_worker): Help gcc to optimize by
+	adding new variables.
+
+	* elf/dl-open.c (add_to_global): Introduce variable ns to help gcc
+	optimize.  Completely extend global scope array before making the
+	new entries visible.
+
+2007-01-15  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/generic/ldsodefs.h: Define DL_LOOKUP_SCOPE_LOCK.
+	* elf/dl-lookup.c (add_dependency): If scope map is locked, unlock
+	it before getting dl_load_lock and then relock.
+	(_dl_lookup_symbol_x): Pass flags to add_dependency.
+	When rerunning _dl_lookup_symbol_x, compute symbol_scope again in
+	case we unlocked the scope.
+	* elf/dl-runtime.c (_dl_fixup): Pass DL_LOOKUP_SCOPE_LOCK to
+	_dl_lookup_symbol_x in case we locked the scope.
+	(_dl_profile_fixup): Likewise.
+	* elf/dl-sym.c (do_sym): In flags passed to call_dl_lookup, also
+	set DL_LOOKUP_SCOPE_LOCK.
+
+2006-10-29  Jakub Jelinek  <jakub@redhat.com>
+
+	* elf/dl-sym.c (do_sym): Use RTLD_SINGLE_THREAD_P.
+	* elf/dl-runtime.c (_dl_fixup, _dl_profile_fixup): Likewise.
+	* elf/dl-close.c (_dl_close_worker): Likewise.
+	* elf/dl-open.c (_dl_open_worker): Likewise.
+	* sysdeps/generic/sysdep-cancel.h (RTLD_SINGLE_THREAD_P): Define.
+
+2006-10-27  Jakub Jelinek  <jakub@redhat.com>
+
+	* elf/dl-lookup.c (_dl_debug_bindings): Remove unused symbol_scope
+	argument.
+	(_dl_lookup_symbol_x): Adjust caller.
+
+	* sysdeps/generic/ldsodefs.h (struct link_namespaces): Remove
+	_ns_global_scope.
+	* elf/rtld.c (dl_main): Don't initialize _ns_global_scope.
+
+	* elf/dl-libc.c: Revert l_scope name changes.
+	* elf/dl-load.c: Likewise.
+	* elf/dl-object.c: Likewise.
+	* elf/rtld.c: Likewise.
+	* elf/dl-close.c (_dl_close): Likewise.
+	* elf/dl-open.c (dl_open_worker): Likewise.  If not SINGLE_THREAD_P,
+	always use __rtld_mrlock_{change,done}.  Always free old scope list
+	here if not l_scope_mem.
+	* elf/dl-runtime.c (_dl_fixup, _dl_profile_fixup): Revert l_scope name
+	change.  Never free scope list here.  Just __rtld_mrlock_lock before
+	the lookup and __rtld_mrlock_unlock it after the lookup.
+	* elf/dl-sym.c: Likewise.
+	* include/link.h (struct r_scoperec): Remove.
+	(struct link_map): Replace l_scoperec with l_scope, l_scoperec_mem
+	with l_scope_mem and l_scoperec_lock with l_scope_lock.
+
+2006-10-18  Ulrich Drepper  <drepper@redhat.com>
+
+	* elf/dl-lookup.c (_dl_lookup_symbol_x): Add warning to
+	_dl_lookup_symbol_x code.
+
+2006-10-17  Jakub Jelinek  <jakub@redhat.com>
+
+	* elf/dl-runtime.c: Include sysdep-cancel.h.
+	(_dl_fixup, _dl_profile_fixup): Use __rtld_mrlock_* and
+	scoperec->nusers only if !SINGLE_THREAD_P.
+	* elf/dl-sym.c: Include sysdep-cancel.h.
+	(do_sym): Use __rtld_mrlock_* and scoperec->nusers only
+	if !SINGLE_THREAD_P.
+	* elf/dl-close.c: Include sysdep-cancel.h.
+	(_dl_close): Use __rtld_mrlock_* and scoperec->nusers only
+	if !SINGLE_THREAD_P.
+	* elf/dl-open.c: Include sysdep-cancel.h.
+	(dl_open_worker): Use __rtld_mrlock_* and scoperec->nusers only
+	if !SINGLE_THREAD_P.
+
+2006-10-09  Ulrich Drepper  <drepper@redhat.com>
+	    Jakub Jelinek  <jakub@redhat.com>
+
+	Implement reference counting of scope records.
+	* elf/dl-close.c (_dl_close): Remove all scopes from removed objects
+	from the list in objects which remain.  Always allocate new scope
+	record.
+	* elf/dl-open.c (dl_open_worker): When growing array for scopes,
+	don't resize, allocate a new one.
+	* elf/dl-runtime.c: Update reference counters before using a scope
+	array.
+	* elf/dl-sym.c: Likewise.
+	* elf/dl-libc.c: Adjust for l_scope name change.
+	* elf/dl-load.c: Likewise.
+	* elf/dl-object.c: Likewise.
+	* elf/rtld.c: Likewise.
+	* include/link.h: Include <rtld-lowlevel.h>.  Define struct
+	r_scoperec.  Replace r_scope with pointer to r_scoperec structure.
+	Add l_scoperec_lock.
+	* sysdeps/generic/ldsodefs.h: Include <rtld-lowlevel.h>.
+	* sysdeps/generic/rtld-lowlevel.h: New file.
+nptl/
+2007-05-28  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/i386/tls.h (THREAD_GSCOPE_RESET_FLAG): Use explicit
+	insn suffix.
+	(THREAD_GSCOPE_GET_FLAG): Remove.
+	* sysdeps/x86_64/tls.h (THREAD_GSCOPE_GET_FLAG): Remove.
+	* allocatestack.c (__wait_lookup_done): Revert 2007-05-24
+	changes.
+	* sysdeps/powerpc/tls.h (tcbhead_t): Remove gscope_flag.
+	(THREAD_GSCOPE_GET_FLAG): Remove.
+	(THREAD_GSCOPE_RESET_FLAG): Use THREAD_SELF->header.gscope_flag
+	instead of THREAD_GSCOPE_GET_FLAG.
+	(THREAD_GSCOPE_SET_FLAG): Likewise.  Add atomic_write_barrier after
+	it.
+	* sysdeps/s390/tls.h (THREAD_GSCOPE_FLAG_UNUSED,
+	THREAD_GSCOPE_FLAG_USED, THREAD_GSCOPE_FLAG_WAIT,
+	THREAD_GSCOPE_RESET_FLAG, THREAD_GSCOPE_SET_FLAG,
+	THREAD_GSCOPE_WAIT): Define.
+	* sysdeps/sparc/tls.h (THREAD_GSCOPE_FLAG_UNUSED,
+	THREAD_GSCOPE_FLAG_USED, THREAD_GSCOPE_FLAG_WAIT,
+	THREAD_GSCOPE_RESET_FLAG, THREAD_GSCOPE_SET_FLAG,
+	THREAD_GSCOPE_WAIT): Define.
+	* sysdeps/sh/tls.h (THREAD_GSCOPE_FLAG_UNUSED,
+	THREAD_GSCOPE_FLAG_USED, THREAD_GSCOPE_FLAG_WAIT,
+	THREAD_GSCOPE_RESET_FLAG, THREAD_GSCOPE_SET_FLAG,
+	THREAD_GSCOPE_WAIT): Define.
+	* sysdeps/ia64/tls.h (THREAD_GSCOPE_FLAG_UNUSED,
+	THREAD_GSCOPE_FLAG_USED, THREAD_GSCOPE_FLAG_WAIT,
+	THREAD_GSCOPE_RESET_FLAG, THREAD_GSCOPE_SET_FLAG,
+	THREAD_GSCOPE_WAIT): Define.
+
+2007-05-24  Richard Henderson  <rth@redhat.com>
+
+	* descr.h (struct pthread): Add header.gscope_flag.
+	* sysdeps/alpha/tls.h (THREAD_GSCOPE_FLAG_UNUSED,
+	THREAD_GSCOPE_FLAG_USED, THREAD_GSCOPE_FLAG_WAIT,
+	THREAD_GSCOPE_RESET_FLAG, THREAD_GSCOPE_SET_FLAG,
+	THREAD_GSCOPE_WAIT): Define.
+
+2007-05-26  Ulrich Drepper  <drepper@redhat.com>
+
+	* allocatestack.c: Revert last change.
+	* init.c: Likewise.
+	* sysdeps/i386/tls.h: Likewise.
+	* sysdeps/x86_64/tls.h: Likewise.
+
+2007-05-24  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/powerpc/tls.h (tcbhead_t): Add gscope_flag.
+	(THREAD_GSCOPE_FLAG_UNUSED, THREAD_GSCOPE_FLAG_USED,
+	THREAD_GSCOPE_FLAG_WAIT): Define.
+	(THREAD_GSCOPE_GET_FLAG, THREAD_GSCOPE_SET_FLAG,
+	THREAD_GSCOPE_RESET_FLAG, THREAD_GSCOPE_WAIT): Define.
+	* sysdeps/i386/tls.h (THREAD_GSCOPE_WAIT): Don't use
+	PTR_DEMANGLE.
+	(THREAD_GSCOPE_GET_FLAG): Define.
+	* sysdeps/x86_64/tls.h (THREAD_GSCOPE_GET_FLAG): Define.
+	* allocatestack.c (__wait_lookup_done): Use THREAD_GSCOPE_GET_FLAG
+	instead of ->header.gscope_flag directly.
+
+2007-05-21  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/pthread/pthread-functions.h (struct pthread_functions):
+	Remove ptr_wait_lookup_done again.
+	* init.c (pthread_functions): Don't add .ptr_wait_lookup_done here.
+	(__pthread_initialize_minimal_internal): Initialize
+	_dl_wait_lookup_done pointer in _rtld_global directly.
+	* sysdeps/unix/sysv/linux/libc_pthread_init.c (__libc_pthread_init):
+	Remove code to code _dl_wait_lookup_done.
+	* sysdeps/x86_64/tls.h (THREAD_GSCOPE_WAIT): The pointer is not
+	encrypted for now.
+
+2007-05-19  Ulrich Drepper  <drepper@redhat.com>
+
+	* allocatestack.c (__wait_lookup_done): New function.
+	* sysdeps/pthread/pthread-functions.h (struct pthread_functions):
+	Add ptr_wait_lookup_done.
+	* init.c (pthread_functions): Initialize .ptr_wait_lookup_done.
+	* pthreadP.h: Declare __wait_lookup_done.
+	* sysdeps/i386/tls.h (tcbhead_t): Add gscope_flag.
+	Define macros to implement reference handling of global scope.
+	* sysdeps/x86_64/tls.h: Likewise.
+	* sysdeps/unix/sysv/linux/libc_pthread_init.c (__libc_pthread_init):
+	Initialize GL(dl_wait_lookup_done).
+
+2006-12-09  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/unix/sysv/linux/rtld-lowlevel.h
+	(__rtld_mrlock_initialize): Add missing closing parenthesis.
+
+2006-10-29  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/unix/sysv/linux/i386/sysdep-cancel.h (RTLD_SINGLE_THREAD_P):
+	Define.
+	(SINGLE_THREAD_P): Define to 1 if IS_IN_rtld.
+	* sysdeps/unix/sysv/linux/alpha/sysdep-cancel.h: Likewise.
+	* sysdeps/unix/sysv/linux/ia64/sysdep-cancel.h: Likewise.
+	* sysdeps/unix/sysv/linux/s390/s390-32/sysdep-cancel.h: Likewise.
+	* sysdeps/unix/sysv/linux/s390/s390-64/sysdep-cancel.h: Likewise.
+	* sysdeps/unix/sysv/linux/powerpc/powerpc64/sysdep-cancel.h: Likewise.
+	* sysdeps/unix/sysv/linux/powerpc/powerpc32/sysdep-cancel.h: Likewise.
+	* sysdeps/unix/sysv/linux/x86_64/sysdep-cancel.h: Likewise.
+	* sysdeps/unix/sysv/linux/sparc/sparc32/sysdep-cancel.h: Likewise.
+	* sysdeps/unix/sysv/linux/sparc/sparc64/sysdep-cancel.h: Likewise.
+	* sysdeps/unix/sysv/linux/sh/sysdep-cancel.h: Likewise.
+
+2006-10-27  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/unix/sysv/linux/rtld-lowlevel.h (__rtld_mrlock_lock,
+	__rtld_mrlock_change): Update oldval if atomic compare and exchange
+	failed.
+
+	* sysdeps/unix/sysv/linux/alpha/sysdep-cancel.h (SINGLE_THREAD_P):
+	Define to THREAD_SELF->header.multiple_threads.
+	* sysdeps/unix/sysv/linux/ia64/sysdep-cancel.h (SINGLE_THREAD_P):
+	Likewise.
+	* sysdeps/unix/sysv/linux/i386/sysdep-cancel.h (SINGLE_THREAD_P):
+	Likewise.
+	* sysdeps/unix/sysv/linux/s390/s390-32/sysdep-cancel.h
+	(SINGLE_THREAD_P): Likewise.
+	* sysdeps/unix/sysv/linux/s390/s390-64/sysdep-cancel.h
+	(SINGLE_THREAD_P): Likewise.
+	* sysdeps/unix/sysv/linux/powerpc/powerpc32/sysdep-cancel.h
+	(SINGLE_THREAD_P): Likewise.
+	* sysdeps/unix/sysv/linux/powerpc/powerpc64/sysdep-cancel.h
+	(SINGLE_THREAD_P): Likewise.
+	* sysdeps/unix/sysv/linux/x86_64/sysdep-cancel.h (SINGLE_THREAD_P):
+	Likewise.
+	* sysdeps/unix/sysv/linux/sparc/sparc32/sysdep-cancel.h
+	(SINGLE_THREAD_P): Likewise.
+	* sysdeps/unix/sysv/linux/sparc/sparc64/sysdep-cancel.h
+	(SINGLE_THREAD_P): Likewise.
+	* sysdeps/unix/sysv/linux/sh/sysdep-cancel.h (SINGLE_THREAD_P):
+	Likewise.
+
+2006-10-09  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/unix/sysv/linux/rtld-lowlevel.h: New file..
+
+--- libc/elf/dl-object.c.jj	2005-01-06 23:40:26.000000000 +0100
++++ libc/elf/dl-object.c	2007-06-13 11:34:19.000000000 +0200
+@@ -85,6 +85,11 @@ _dl_new_object (char *realname, const ch
+   new->l_scope = new->l_scope_mem;
+   new->l_scope_max = sizeof (new->l_scope_mem) / sizeof (new->l_scope_mem[0]);
+ 
++  /* No need to initialize the scope lock if the initializer is zero.  */
++#if _RTLD_MRLOCK_INITIALIZER != 0
++  __rtld_mrlock_initialize (new->l_scope_lock);
++#endif
++
+   /* Counter for the scopes we have to handle.  */
+   idx = 0;
+ 
+--- libc/elf/dl-runtime.c.jj	2005-02-07 23:47:00.000000000 +0100
++++ libc/elf/dl-runtime.c	2007-06-13 11:34:19.000000000 +0200
+@@ -24,7 +24,10 @@
+ #include <unistd.h>
+ #include <sys/param.h>
+ #include <ldsodefs.h>
++#include <sysdep-cancel.h>
+ #include "dynamic-link.h"
++#include <tls.h>
++
+ 
+ #if (!defined ELF_MACHINE_NO_RELA && !defined ELF_MACHINE_PLT_REL) \
+     || ELF_MACHINE_NO_REL
+@@ -92,16 +95,37 @@ _dl_fixup (
+ 	    version = NULL;
+ 	}
+ 
+-      result = _dl_lookup_symbol_x (strtab + sym->st_name, l, &sym,
+-				    l->l_scope, version, ELF_RTYPE_CLASS_PLT,
+-				    DL_LOOKUP_ADD_DEPENDENCY, NULL);
++      /* We need to keep the scope around so do some locking.  This is
++	 not necessary for objects which cannot be unloaded or when
++	 we are not using any threads (yet).  */
++      int flags = DL_LOOKUP_ADD_DEPENDENCY;
++      if (!RTLD_SINGLE_THREAD_P)
++	{
++	  THREAD_GSCOPE_SET_FLAG ();
++
++	  if (l->l_type == lt_loaded)
++	    {
++	      __rtld_mrlock_lock (l->l_scope_lock);
++	      flags |= DL_LOOKUP_SCOPE_LOCK;
++	    }
++	}
++
++      result = _dl_lookup_symbol_x (strtab + sym->st_name, l, &sym, l->l_scope,
++				    version, ELF_RTYPE_CLASS_PLT, flags, NULL);
++
++      if ((flags & DL_LOOKUP_SCOPE_LOCK) != 0)
++	__rtld_mrlock_unlock (l->l_scope_lock);
++
++      /* We are done with the global scope.  */
++      if (!RTLD_SINGLE_THREAD_P)
++	THREAD_GSCOPE_RESET_FLAG ();
+ 
+       /* Currently result contains the base load address (or link map)
+ 	 of the object that defines sym.  Now add in the symbol
+ 	 offset.  */
+       value = DL_FIXUP_MAKE_VALUE (result,
+-				   sym ? LOOKUP_VALUE_ADDRESS (result)
+-					 + sym->st_value : 0);
++				   sym ? (LOOKUP_VALUE_ADDRESS (result)
++					  + sym->st_value) : 0);
+     }
+   else
+     {
+@@ -174,10 +198,31 @@ _dl_profile_fixup (
+ 		version = NULL;
+ 	    }
+ 
+-	  result = _dl_lookup_symbol_x (strtab + refsym->st_name, l, &defsym,
+-					l->l_scope, version,
+-					ELF_RTYPE_CLASS_PLT,
+-					DL_LOOKUP_ADD_DEPENDENCY, NULL);
++	  /* We need to keep the scope around so do some locking.  This is
++	     not necessary for objects which cannot be unloaded or when
++	     we are not using any threads (yet).  */
++	  int flags = DL_LOOKUP_ADD_DEPENDENCY;
++	  if (!RTLD_SINGLE_THREAD_P)
++	    {
++	      THREAD_GSCOPE_SET_FLAG ();
++
++	      if (l->l_type == lt_loaded)
++		{
++		  __rtld_mrlock_lock (l->l_scope_lock);
++		  flags |= DL_LOOKUP_SCOPE_LOCK;
++		}
++	    }
++
++	  result = _dl_lookup_symbol_x (strtab + refsym->st_name, l,
++					&defsym, l->l_scope, version,
++					ELF_RTYPE_CLASS_PLT, flags, NULL);
++
++	  if ((flags & DL_LOOKUP_SCOPE_LOCK) != 0)
++	    __rtld_mrlock_unlock (l->l_scope_lock);
++
++	  /* We are done with the global scope.  */
++	  if (!RTLD_SINGLE_THREAD_P)
++	    THREAD_GSCOPE_RESET_FLAG ();
+ 
+ 	  /* Currently result contains the base load address (or link map)
+ 	     of the object that defines sym.  Now add in the symbol
+--- libc/elf/dl-support.c.jj	2007-06-13 11:33:55.000000000 +0200
++++ libc/elf/dl-support.c	2007-06-13 11:34:19.000000000 +0200
+@@ -134,6 +134,9 @@ int (*_dl_make_stack_executable_hook) (v
+   = _dl_make_stack_executable;
+ 
+ 
++/* Function in libpthread to wait for termination of lookups.  */
++void (*_dl_wait_lookup_done) (void);
++
+ #ifdef NEED_DL_SYSINFO
+ /* Needed for improved syscall handling on at least x86/Linux.  */
+ uintptr_t _dl_sysinfo = DL_SYSINFO_DEFAULT;
+--- libc/elf/dl-lookup.c.jj	2006-07-10 23:49:38.000000000 +0200
++++ libc/elf/dl-lookup.c	2007-06-13 11:34:19.000000000 +0200
+@@ -25,6 +25,7 @@
+ #include <ldsodefs.h>
+ #include <dl-hash.h>
+ #include <dl-machine.h>
++#include <sysdep-cancel.h>
+ #include <bits/libc-lock.h>
+ #include <tls.h>
+ 
+@@ -85,7 +86,7 @@ dl_new_hash (const char *s)
+ /* Add extra dependency on MAP to UNDEF_MAP.  */
+ static int
+ internal_function
+-add_dependency (struct link_map *undef_map, struct link_map *map)
++add_dependency (struct link_map *undef_map, struct link_map *map, int flags)
+ {
+   struct link_map **list;
+   struct link_map *runp;
+@@ -98,8 +99,18 @@ add_dependency (struct link_map *undef_m
+   if (undef_map == map)
+     return 0;
+ 
+-  /* Make sure nobody can unload the object while we are at it.  */
+-  __rtld_lock_lock_recursive (GL(dl_load_lock));
++  /* Make sure nobody can unload the object while we are at it.
++     If we hold a scope lock drop it now to avoid ABBA locking problems.  */
++  if ((flags & DL_LOOKUP_SCOPE_LOCK) != 0 && !RTLD_SINGLE_THREAD_P)
++    {
++      __rtld_mrlock_unlock (undef_map->l_scope_lock);
++
++      __rtld_lock_lock_recursive (GL(dl_load_lock));
++
++      __rtld_mrlock_lock (undef_map->l_scope_lock);
++    }
++  else
++    __rtld_lock_lock_recursive (GL(dl_load_lock));
+ 
+   /* Avoid references to objects which cannot be unloaded anyway.  */
+   if (map->l_type != lt_loaded
+@@ -200,14 +211,17 @@ add_dependency (struct link_map *undef_m
+ static void
+ internal_function
+ _dl_debug_bindings (const char *undef_name, struct link_map *undef_map,
+-		    const ElfW(Sym) **ref, struct r_scope_elem *symbol_scope[],
+-		    struct sym_val *value,
++		    const ElfW(Sym) **ref, struct sym_val *value,
+ 		    const struct r_found_version *version, int type_class,
+ 		    int protected);
+ 
+ 
+ /* Search loaded objects' symbol tables for a definition of the symbol
+-   UNDEF_NAME, perhaps with a requested version for the symbol.  */
++   UNDEF_NAME, perhaps with a requested version for the symbol.
++
++   We must never have calls to the audit functions inside this function
++   or in any function which gets called.  If this would happen the audit
++   code might create a thread which can throw off all the scope locking.  */
+ lookup_t
+ internal_function
+ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
+@@ -223,19 +237,16 @@ _dl_lookup_symbol_x (const char *undef_n
+ 
+   bump_num_relocations ();
+ 
+-  /* No other flag than DL_LOOKUP_ADD_DEPENDENCY is allowed if we look
+-     up a versioned symbol.  */
+-  assert (version == NULL || flags == 0 || flags == DL_LOOKUP_ADD_DEPENDENCY);
++  /* No other flag than DL_LOOKUP_ADD_DEPENDENCY and DL_LOOKUP_SCOPE_LOCK
++     is allowed if we look up a versioned symbol.  */
++  assert (version == NULL || (flags & ~(DL_LOOKUP_ADD_DEPENDENCY
++					| DL_LOOKUP_SCOPE_LOCK)) == 0);
+ 
+   size_t i = 0;
+   if (__builtin_expect (skip_map != NULL, 0))
+-    {
+-      /* Search the relevant loaded objects for a definition.  */
+-      while ((*scope)->r_list[i] != skip_map)
+-	++i;
+-
+-      assert (i < (*scope)->r_nlist);
+-    }
++    /* Search the relevant loaded objects for a definition.  */
++    while ((*scope)->r_list[i] != skip_map)
++      ++i;
+ 
+   /* Search the relevant loaded objects for a definition.  */
+   for (size_t start = i; *scope != NULL; start = 0, ++scope)
+@@ -335,19 +346,20 @@ _dl_lookup_symbol_x (const char *undef_n
+ 	 runtime lookups.  */
+       && (flags & DL_LOOKUP_ADD_DEPENDENCY) != 0
+       /* Add UNDEF_MAP to the dependencies.  */
+-      && add_dependency (undef_map, current_value.m) < 0)
++      && add_dependency (undef_map, current_value.m, flags) < 0)
+       /* Something went wrong.  Perhaps the object we tried to reference
+ 	 was just removed.  Try finding another definition.  */
+       return _dl_lookup_symbol_x (undef_name, undef_map, ref,
+-				  symbol_scope, version, type_class,
+-				  flags, skip_map);
++				  (flags & DL_LOOKUP_SCOPE_LOCK) == 0
++				  ? symbol_scope : undef_map->l_scope, version,
++				  type_class, flags, skip_map);
+ 
+   /* The object is used.  */
+   current_value.m->l_used = 1;
+ 
+   if (__builtin_expect (GLRO(dl_debug_mask)
+ 			& (DL_DEBUG_BINDINGS|DL_DEBUG_PRELINK), 0))
+-    _dl_debug_bindings (undef_name, undef_map, ref, symbol_scope,
++    _dl_debug_bindings (undef_name, undef_map, ref,
+ 			&current_value, version, type_class, protected);
+ 
+   *ref = current_value.s;
+@@ -404,8 +416,7 @@ _dl_setup_hash (struct link_map *map)
+ static void
+ internal_function
+ _dl_debug_bindings (const char *undef_name, struct link_map *undef_map,
+-		    const ElfW(Sym) **ref, struct r_scope_elem *symbol_scope[],
+-		    struct sym_val *value,
++		    const ElfW(Sym) **ref, struct sym_val *value,
+ 		    const struct r_found_version *version, int type_class,
+ 		    int protected)
+ {
+--- libc/elf/do-lookup.h.jj	2006-09-04 22:40:11.000000000 +0200
++++ libc/elf/do-lookup.h	2007-06-13 11:34:19.000000000 +0200
+@@ -29,8 +29,13 @@ do_lookup_x (const char *undef_name, uin
+ 	     const struct r_found_version *const version, int flags,
+ 	     struct link_map *skip, int type_class)
+ {
+-  struct link_map **list = scope->r_list;
+   size_t n = scope->r_nlist;
++  /* Make sure we read the value before proceeding.  Otherwise we
++     might use r_list pointing to the initial scope and r_nlist being
++     the value after a resize.  That is the only path in dl-open.c not
++     protected by GSCOPE.  A read barrier here might be to expensive.  */
++  __asm volatile ("" : "+r" (n), "+m" (scope->r_list));
++  struct link_map **list = scope->r_list;
+ 
+   do
+     {
+--- libc/elf/dl-sym.c.jj	2006-02-26 21:48:48.000000000 +0100
++++ libc/elf/dl-sym.c	2007-06-13 11:54:27.000000000 +0200
+@@ -17,6 +17,7 @@
+    Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+    02111-1307 USA.  */
+ 
++#include <assert.h>
+ #include <stddef.h>
+ #include <setjmp.h>
+ #include <libintl.h>
+@@ -24,6 +25,7 @@
+ #include <dlfcn.h>
+ #include <ldsodefs.h>
+ #include <dl-hash.h>
++#include <sysdep-cancel.h>
+ #ifdef USE_TLS
+ # include <dl-tls.h>
+ #endif
+@@ -58,6 +60,29 @@ _dl_tls_symaddr (struct link_map *map, c
+ #endif
+ 
+ 
++struct call_dl_lookup_args
++{
++  /* Arguments to do_dlsym.  */
++  struct link_map *map;
++  const char *name;
++  struct r_found_version *vers;
++  int flags;
++
++  /* Return values of do_dlsym.  */
++  lookup_t loadbase;
++  const ElfW(Sym) **refp;
++};
++
++static void
++call_dl_lookup (void *ptr)
++{
++  struct call_dl_lookup_args *args = (struct call_dl_lookup_args *) ptr;
++  args->map = GLRO(dl_lookup_symbol_x) (args->name, args->map, args->refp,
++					args->map->l_scope, args->vers, 0,
++					args->flags, NULL);
++}
++
++
+ static void *
+ internal_function
+ do_sym (void *handle, const char *name, void *who,
+@@ -84,10 +109,51 @@ do_sym (void *handle, const char *name, 
+ 	}
+ 
+   if (handle == RTLD_DEFAULT)
+-    /* Search the global scope.  */
+-    result = GLRO(dl_lookup_symbol_x) (name, match, &ref, match->l_scope,
+-				       vers, 0, flags|DL_LOOKUP_ADD_DEPENDENCY,
+-				       NULL);
++    {
++      /* Search the global scope.  We have the simple case where
++	 we look up in the scope of an object which was part of
++	 the initial binary.  And then the more complex part
++	 where the object is dynamically loaded and the scope
++	 array can change.  */
++      if (match->l_type != lt_loaded || RTLD_SINGLE_THREAD_P)
++	result = GLRO(dl_lookup_symbol_x) (name, match, &ref,
++					   match->l_scope, vers, 0,
++					   flags | DL_LOOKUP_ADD_DEPENDENCY,
++					   NULL);
++      else
++	{
++	  __rtld_mrlock_lock (match->l_scope_lock);
++
++	  struct call_dl_lookup_args args;
++	  args.name = name;
++	  args.map = match;
++	  args.vers = vers;
++	  args.flags = flags | DL_LOOKUP_ADD_DEPENDENCY | DL_LOOKUP_SCOPE_LOCK;
++	  args.refp = &ref;
++
++	  const char *objname;
++	  const char *errstring = NULL;
++	  bool malloced;
++	  int err = GLRO(dl_catch_error) (&objname, &errstring, &malloced,
++					  call_dl_lookup, &args);
++
++	  __rtld_mrlock_unlock (match->l_scope_lock);
++
++	  if (__builtin_expect (errstring != NULL, 0))
++	    {
++	      /* The lookup was unsuccessful.  Rethrow the error.  */
++	      char *errstring_dup = strdupa (errstring);
++	      char *objname_dup = strdupa (objname);
++	      if (malloced)
++		free ((char *) errstring);
++
++	      GLRO(dl_signal_error) (err, objname_dup, NULL, errstring_dup);
++	      /* NOTREACHED */
++	    }
++
++	  result = args.map;
++	}
++    }
+   else if (handle == RTLD_NEXT)
+     {
+       if (__builtin_expect (match == GL(dl_ns)[LM_ID_BASE]._ns_loaded, 0))
+--- libc/elf/rtld.c.jj	2006-10-02 20:24:37.000000000 +0200
++++ libc/elf/rtld.c	2007-06-13 11:34:19.000000000 +0200
+@@ -2143,7 +2143,6 @@ ERROR: ld.so: object '%s' cannot be load
+ 
+   /* Now set up the variable which helps the assembler startup code.  */
+   GL(dl_ns)[LM_ID_BASE]._ns_main_searchlist = &main_map->l_searchlist;
+-  GL(dl_ns)[LM_ID_BASE]._ns_global_scope[0] = &main_map->l_searchlist;
+ 
+   /* Save the information about the original global scope list since
+      we need it in the memory handling later.  */
+--- libc/elf/dl-close.c.jj	2007-06-13 11:33:55.000000000 +0200
++++ libc/elf/dl-close.c	2007-06-13 12:24:42.000000000 +0200
+@@ -19,6 +19,7 @@
+ 
+ #include <assert.h>
+ #include <dlfcn.h>
++#include <errno.h>
+ #include <libintl.h>
+ #include <stddef.h>
+ #include <stdio.h>
+@@ -29,12 +30,18 @@
+ #include <ldsodefs.h>
+ #include <sys/types.h>
+ #include <sys/mman.h>
++#include <sysdep-cancel.h>
++#include <tls.h>
+ 
+ 
+ /* Type of the constructor functions.  */
+ typedef void (*fini_t) (void);
+ 
+ 
++/* Special l_idx value used to indicate which objects remain loaded.  */
++#define IDX_STILL_USED -1
++
++
+ #ifdef USE_TLS
+ /* Returns true we an non-empty was found.  */
+ static bool
+@@ -103,8 +110,6 @@ remove_slotinfo (size_t idx, struct dtv_
+ void
+ _dl_close_worker (struct link_map *map)
+ {
+-  Lmid_t ns = map->l_ns;
+-
+   /* One less direct use.  */
+   --map->l_direct_opencount;
+ 
+@@ -127,13 +132,16 @@ _dl_close_worker (struct link_map *map)
+       return;
+     }
+ 
++  Lmid_t nsid = map->l_ns;
++  struct link_namespaces *ns = &GL(dl_ns)[nsid];
++
+  retry:
+   dl_close_state = pending;
+ 
+ #ifdef USE_TLS
+   bool any_tls = false;
+ #endif
+-  const unsigned int nloaded = GL(dl_ns)[ns]._ns_nloaded;
++  const unsigned int nloaded = ns->_ns_nloaded;
+   char used[nloaded];
+   char done[nloaded];
+   struct link_map *maps[nloaded];
+@@ -141,7 +149,7 @@ _dl_close_worker (struct link_map *map)
+   /* Run over the list and assign indexes to the link maps and enter
+      them into the MAPS array.  */
+   int idx = 0;
+-  for (struct link_map *l = GL(dl_ns)[ns]._ns_loaded; l != NULL; l = l->l_next)
++  for (struct link_map *l = ns->_ns_loaded; l != NULL; l = l->l_next)
+     {
+       l->l_idx = idx;
+       maps[idx] = l;
+@@ -174,7 +182,7 @@ _dl_close_worker (struct link_map *map)
+       done[done_index] = 1;
+       used[done_index] = 1;
+       /* Signal the object is still needed.  */
+-      l->l_idx = -1;
++      l->l_idx = IDX_STILL_USED;
+ 
+       /* Mark all dependencies as used.  */
+       if (l->l_initfini != NULL)
+@@ -182,7 +190,7 @@ _dl_close_worker (struct link_map *map)
+ 	  struct link_map **lp = &l->l_initfini[1];
+ 	  while (*lp != NULL)
+ 	    {
+-	      if ((*lp)->l_idx != -1)
++	      if ((*lp)->l_idx != IDX_STILL_USED)
+ 		{
+ 		  assert ((*lp)->l_idx >= 0 && (*lp)->l_idx < nloaded);
+ 
+@@ -203,7 +211,7 @@ _dl_close_worker (struct link_map *map)
+ 	  {
+ 	    struct link_map *jmap = l->l_reldeps[j];
+ 
+-	    if (jmap->l_idx != -1)
++	    if (jmap->l_idx != IDX_STILL_USED)
+ 	      {
+ 		assert (jmap->l_idx >= 0 && jmap->l_idx < nloaded);
+ 
+@@ -218,20 +226,21 @@ _dl_close_worker (struct link_map *map)
+     }
+ 
+   /* Sort the entries.  */
+-  _dl_sort_fini (GL(dl_ns)[ns]._ns_loaded, maps, nloaded, used, ns);
++  _dl_sort_fini (ns->_ns_loaded, maps, nloaded, used, nsid);
+ 
+   /* Call all termination functions at once.  */
+ #ifdef SHARED
+-  bool do_audit = GLRO(dl_naudit) > 0 && !GL(dl_ns)[ns]._ns_loaded->l_auditing;
++  bool do_audit = GLRO(dl_naudit) > 0 && !ns->_ns_loaded->l_auditing;
+ #endif
+   bool unload_any = false;
++  unsigned int unload_global = 0;
+   unsigned int first_loaded = ~0;
+   for (unsigned int i = 0; i < nloaded; ++i)
+     {
+       struct link_map *imap = maps[i];
+ 
+       /* All elements must be in the same namespace.  */
+-      assert (imap->l_ns == ns);
++      assert (imap->l_ns == nsid);
+ 
+       if (!used[i])
+ 	{
+@@ -246,7 +255,7 @@ _dl_close_worker (struct link_map *map)
+ 	      if (__builtin_expect (GLRO(dl_debug_mask) & DL_DEBUG_IMPCALLS,
+ 				    0))
+ 		_dl_debug_printf ("\ncalling fini: %s [%lu]\n\n",
+-				  imap->l_name, ns);
++				  imap->l_name, nsid);
+ 
+ 	      if (imap->l_info[DT_FINI_ARRAY] != NULL)
+ 		{
+@@ -289,6 +298,9 @@ _dl_close_worker (struct link_map *map)
+ 	  /* We indeed have an object to remove.  */
+ 	  unload_any = true;
+ 
++	  if (imap->l_global)
++	    ++unload_global;
++
+ 	  /* Remember where the first dynamically loaded object is.  */
+ 	  if (i < first_loaded)
+ 	    first_loaded = i;
+@@ -296,8 +308,9 @@ _dl_close_worker (struct link_map *map)
+       /* Else used[i].  */
+       else if (imap->l_type == lt_loaded)
+ 	{
+-	  if (imap->l_searchlist.r_list == NULL
+-	      && imap->l_initfini != NULL)
++	  struct r_scope_elem *new_list = NULL;
++
++	  if (imap->l_searchlist.r_list == NULL && imap->l_initfini != NULL)
+ 	    {
+ 	      /* The object is still used.  But one of the objects we are
+ 		 unloading right now is responsible for loading it.  If
+@@ -314,44 +327,108 @@ _dl_close_worker (struct link_map *map)
+ 	      imap->l_searchlist.r_list = &imap->l_initfini[cnt + 1];
+ 	      imap->l_searchlist.r_nlist = cnt;
+ 
+-	      for (cnt = 0; imap->l_scope[cnt] != NULL; ++cnt)
+-		/* This relies on l_scope[] entries being always set either
+-		   to its own l_symbolic_searchlist address, or some map's
+-		   l_searchlist address.  */
+-		if (imap->l_scope[cnt] != &imap->l_symbolic_searchlist)
+-		  {
+-		    struct link_map *tmap;
+-
+-		    tmap = (struct link_map *) ((char *) imap->l_scope[cnt]
+-						- offsetof (struct link_map,
+-							    l_searchlist));
+-		    assert (tmap->l_ns == ns);
+-		    if (tmap->l_idx != -1)
+-		      {
+-			imap->l_scope[cnt] = &imap->l_searchlist;
+-			break;
+-		      }
+-		  }
++	      new_list = &imap->l_searchlist;
+ 	    }
+-	  else
++
++	  /* Count the number of scopes which remain after the unload.
++	     When we add the local search list count it.  Always add
++	     one for the terminating NULL pointer.  */
++	  size_t remain = (new_list != NULL) + 1;
++	  bool removed_any = false;
++	  for (size_t cnt = 0; imap->l_scope[cnt] != NULL; ++cnt)
++	    /* This relies on l_scope[] entries being always set either
++	       to its own l_symbolic_searchlist address, or some map's
++	       l_searchlist address.  */
++	    if (imap->l_scope[cnt] != &imap->l_symbolic_searchlist)
++	      {
++		struct link_map *tmap = (struct link_map *)
++		  ((char *) imap->l_scope[cnt]
++		   - offsetof (struct link_map, l_searchlist));
++		assert (tmap->l_ns == nsid);
++		if (tmap->l_idx == IDX_STILL_USED)
++		  ++remain;
++		else
++		  removed_any = true;
++	      }
++	    else
++	      ++remain;
++
++	  if (removed_any)
+ 	    {
+-	      unsigned int cnt = 0;
+-	      while (imap->l_scope[cnt] != NULL)
++	      /* Always allocate a new array for the scope.  This is
++		 necessary since we must be able to determine the last
++		 user of the current array.  If possible use the link map's
++		 memory.  */
++	      size_t new_size;
++	      struct r_scope_elem **newp;
++
++#define SCOPE_ELEMS(imap) \
++  (sizeof (imap->l_scope_mem) / sizeof (imap->l_scope_mem[0]))
++
++	      if (imap->l_scope != imap->l_scope_mem
++		  && remain < SCOPE_ELEMS (imap))
++		{
++		  new_size = SCOPE_ELEMS (imap);
++		  newp = imap->l_scope_mem;
++		}
++	      else
++		{
++		  new_size = imap->l_scope_max;
++		  newp = (struct r_scope_elem **)
++		    malloc (new_size * sizeof (struct r_scope_elem *));
++		  if (newp == NULL)
++		    _dl_signal_error (ENOMEM, "dlclose", NULL,
++				      N_("cannot create scope list"));
++		}
++
++	      /* Copy over the remaining scope elements.  */
++	      remain = 0;
++	      for (size_t cnt = 0; imap->l_scope[cnt] != NULL; ++cnt)
+ 		{
+-		  if (imap->l_scope[cnt] == &map->l_searchlist)
++		  if (imap->l_scope[cnt] != &imap->l_symbolic_searchlist)
+ 		    {
+-		      while ((imap->l_scope[cnt] = imap->l_scope[cnt + 1])
+-			     != NULL)
+-			++cnt;
+-		      break;
++		      struct link_map *tmap = (struct link_map *)
++			((char *) imap->l_scope[cnt]
++			 - offsetof (struct link_map, l_searchlist));
++		      if (tmap->l_idx != IDX_STILL_USED)
++			{
++			  /* Remove the scope.  Or replace with own map's
++			     scope.  */
++			  if (new_list != NULL)
++			    {
++			      newp[remain++] = new_list;
++			      new_list = NULL;
++			    }
++			  continue;
++			}
+ 		    }
+-		  ++cnt;
++
++		  newp[remain++] = imap->l_scope[cnt];
++		}
++	      newp[remain] = NULL;
++
++	      struct r_scope_elem **old = imap->l_scope;
++
++	      if (RTLD_SINGLE_THREAD_P)
++		imap->l_scope = newp;
++	      else
++		{
++		  __rtld_mrlock_change (imap->l_scope_lock);
++		  imap->l_scope = newp;
++		  __rtld_mrlock_done (imap->l_scope_lock);
+ 		}
++
++	      /* No user anymore, we can free it now.  */
++	      if (old != imap->l_scope_mem)
++		free (old);
++
++	      imap->l_scope_max = new_size;
+ 	    }
+ 
+ 	  /* The loader is gone, so mark the object as not having one.
+-	     Note: l_idx != -1 -> object will be removed.  */
+-	  if (imap->l_loader != NULL && imap->l_loader->l_idx != -1)
++	     Note: l_idx != IDX_STILL_USED -> object will be removed.  */
++	  if (imap->l_loader != NULL
++	      && imap->l_loader->l_idx != IDX_STILL_USED)
+ 	    imap->l_loader = NULL;
+ 
+ 	  /* Remember where the first dynamically loaded object is.  */
+@@ -368,7 +445,7 @@ _dl_close_worker (struct link_map *map)
+   /* Auditing checkpoint: we will start deleting objects.  */
+   if (__builtin_expect (do_audit, 0))
+     {
+-      struct link_map *head = GL(dl_ns)[ns]._ns_loaded;
++      struct link_map *head = ns->_ns_loaded;
+       struct audit_ifaces *afct = GLRO(dl_audit);
+       /* Do not call the functions for any auditing object.  */
+       if (head->l_auditing == 0)
+@@ -385,10 +462,38 @@ _dl_close_worker (struct link_map *map)
+ #endif
+ 
+   /* Notify the debugger we are about to remove some loaded objects.  */
+-  struct r_debug *r = _dl_debug_initialize (0, ns);
++  struct r_debug *r = _dl_debug_initialize (0, nsid);
+   r->r_state = RT_DELETE;
+   _dl_debug_state ();
+ 
++  if (unload_global)
++    {
++      /* Some objects are in the global scope list.  Remove them.  */
++      struct r_scope_elem *ns_msl = ns->_ns_main_searchlist;
++      unsigned int i;
++      unsigned int j = 0;
++      unsigned int cnt = ns_msl->r_nlist;
++
++      while (cnt > 0 && ns_msl->r_list[cnt - 1]->l_removed)
++	--cnt;
++
++      if (cnt + unload_global == ns_msl->r_nlist)
++	/* Speed up removing most recently added objects.  */
++	j = cnt;
++      else
++	for (i = 0; i < cnt; i++)
++	  if (ns_msl->r_list[i]->l_removed == 0)
++	    {
++	      if (i != j)
++		ns_msl->r_list[j] = ns_msl->r_list[i];
++	      j++;
++	    }
++      ns_msl->r_nlist = j;
++
++      if (!RTLD_SINGLE_THREAD_P)
++	THREAD_GSCOPE_WAIT ();
++    }
++
+ #ifdef USE_TLS
+   size_t tls_free_start;
+   size_t tls_free_end;
+@@ -406,23 +511,6 @@ _dl_close_worker (struct link_map *map)
+ 
+ 	  /* That was the last reference, and this was a dlopen-loaded
+ 	     object.  We can unmap it.  */
+-	  if (__builtin_expect (imap->l_global, 0))
+-	    {
+-	      /* This object is in the global scope list.  Remove it.  */
+-	      unsigned int cnt = GL(dl_ns)[ns]._ns_main_searchlist->r_nlist;
+-
+-	      do
+-		--cnt;
+-	      while (GL(dl_ns)[ns]._ns_main_searchlist->r_list[cnt] != imap);
+-
+-	      /* The object was already correctly registered.  */
+-	      while (++cnt
+-		     < GL(dl_ns)[ns]._ns_main_searchlist->r_nlist)
+-		GL(dl_ns)[ns]._ns_main_searchlist->r_list[cnt - 1]
+-		  = GL(dl_ns)[ns]._ns_main_searchlist->r_list[cnt];
+-
+-	      --GL(dl_ns)[ns]._ns_main_searchlist->r_nlist;
+-	    }
+ 
+ #ifdef USE_TLS
+ 	  /* Remove the object from the dtv slotinfo array if it uses TLS.  */
+@@ -518,12 +606,12 @@ _dl_close_worker (struct link_map *map)
+ 	  else
+ 	    {
+ #ifdef SHARED
+-	      assert (ns != LM_ID_BASE);
++	      assert (nsid != LM_ID_BASE);
+ #endif
+-	      GL(dl_ns)[ns]._ns_loaded = imap->l_next;
++	      ns->_ns_loaded = imap->l_next;
+ 	    }
+ 
+-	  --GL(dl_ns)[ns]._ns_nloaded;
++	  --ns->_ns_nloaded;
+ 	  if (imap->l_next != NULL)
+ 	    imap->l_next->l_prev = imap->l_prev;
+ 
+@@ -587,7 +675,7 @@ _dl_close_worker (struct link_map *map)
+   /* Auditing checkpoint: we have deleted all objects.  */
+   if (__builtin_expect (do_audit, 0))
+     {
+-      struct link_map *head = GL(dl_ns)[ns]._ns_loaded;
++      struct link_map *head = ns->_ns_loaded;
+       /* Do not call the functions for any auditing object.  */
+       if (head->l_auditing == 0)
+ 	{
+@@ -673,22 +761,22 @@ free_slotinfo (struct dtv_slotinfo_list 
+ 
+ libc_freeres_fn (free_mem)
+ {
+-  for (Lmid_t ns = 0; ns < DL_NNS; ++ns)
+-    if (__builtin_expect (GL(dl_ns)[ns]._ns_global_scope_alloc, 0) != 0
+-	&& (GL(dl_ns)[ns]._ns_main_searchlist->r_nlist
++  for (Lmid_t nsid = 0; nsid < DL_NNS; ++nsid)
++    if (__builtin_expect (GL(dl_ns)[nsid]._ns_global_scope_alloc, 0) != 0
++	&& (GL(dl_ns)[nsid]._ns_main_searchlist->r_nlist
+ 	    // XXX Check whether we need NS-specific initial_searchlist
+ 	    == GLRO(dl_initial_searchlist).r_nlist))
+       {
+ 	/* All object dynamically loaded by the program are unloaded.  Free
+ 	   the memory allocated for the global scope variable.  */
+-	struct link_map **old = GL(dl_ns)[ns]._ns_main_searchlist->r_list;
++	struct link_map **old = GL(dl_ns)[nsid]._ns_main_searchlist->r_list;
+ 
+ 	/* Put the old map in.  */
+-	GL(dl_ns)[ns]._ns_main_searchlist->r_list
++	GL(dl_ns)[nsid]._ns_main_searchlist->r_list
+ 	  // XXX Check whether we need NS-specific initial_searchlist
+ 	  = GLRO(dl_initial_searchlist).r_list;
+ 	/* Signal that the original map is used.  */
+-	GL(dl_ns)[ns]._ns_global_scope_alloc = 0;
++	GL(dl_ns)[nsid]._ns_global_scope_alloc = 0;
+ 
+ 	/* Now free the old map.  */
+ 	free (old);
+--- libc/elf/dl-open.c.jj	2007-06-13 11:33:55.000000000 +0200
++++ libc/elf/dl-open.c	2007-06-13 11:34:19.000000000 +0200
+@@ -31,6 +31,8 @@
+ #include <ldsodefs.h>
+ #include <bp-sym.h>
+ #include <caller.h>
++#include <sysdep-cancel.h>
++#include <tls.h>
+ 
+ #include <dl-dst.h>
+ 
+@@ -96,17 +98,17 @@ add_to_global (struct link_map *new)
+      in an realloc() call.  Therefore we allocate a completely new
+      array the first time we have to add something to the locale scope.  */
+ 
+-  if (GL(dl_ns)[new->l_ns]._ns_global_scope_alloc == 0)
++  struct link_namespaces *ns = &GL(dl_ns)[new->l_ns];
++  if (ns->_ns_global_scope_alloc == 0)
+     {
+       /* This is the first dynamic object given global scope.  */
+-      GL(dl_ns)[new->l_ns]._ns_global_scope_alloc
+-	= GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_nlist + to_add + 8;
++      ns->_ns_global_scope_alloc
++	= ns->_ns_main_searchlist->r_nlist + to_add + 8;
+       new_global = (struct link_map **)
+-	malloc (GL(dl_ns)[new->l_ns]._ns_global_scope_alloc
+-		* sizeof (struct link_map *));
++	malloc (ns->_ns_global_scope_alloc * sizeof (struct link_map *));
+       if (new_global == NULL)
+ 	{
+-	  GL(dl_ns)[new->l_ns]._ns_global_scope_alloc = 0;
++	  ns->_ns_global_scope_alloc = 0;
+ 	nomem:
+ 	  _dl_signal_error (ENOMEM, new->l_libname->name, NULL,
+ 			    N_("cannot extend global scope"));
+@@ -114,29 +116,39 @@ add_to_global (struct link_map *new)
+ 	}
+ 
+       /* Copy over the old entries.  */
+-      GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_list
+-	= memcpy (new_global,
+-		  GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_list,
+-		  (GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_nlist
++      ns->_ns_main_searchlist->r_list
++	= memcpy (new_global, ns->_ns_main_searchlist->r_list,
++		  (ns->_ns_main_searchlist->r_nlist
+ 		   * sizeof (struct link_map *)));
+     }
+-  else if (GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_nlist + to_add
+-	   > GL(dl_ns)[new->l_ns]._ns_global_scope_alloc)
++  else if (ns->_ns_main_searchlist->r_nlist + to_add
++	   > ns->_ns_global_scope_alloc)
+     {
+       /* We have to extend the existing array of link maps in the
+ 	 main map.  */
++      struct link_map **old_global
++	= GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_list;
++      size_t new_nalloc = ((ns->_ns_global_scope_alloc + to_add) * 2);
++
+       new_global = (struct link_map **)
+-	realloc (GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_list,
+-		 ((GL(dl_ns)[new->l_ns]._ns_global_scope_alloc + to_add + 8)
+-		  * sizeof (struct link_map *)));
++	malloc (new_nalloc * sizeof (struct link_map *));
+       if (new_global == NULL)
+ 	goto nomem;
+ 
+-      GL(dl_ns)[new->l_ns]._ns_global_scope_alloc += to_add + 8;
+-      GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_list = new_global;
++      memcpy (new_global, old_global,
++	      ns->_ns_global_scope_alloc * sizeof (struct link_map *));
++
++      ns->_ns_global_scope_alloc = new_nalloc;
++      ns->_ns_main_searchlist->r_list = new_global;
++
++      if (!RTLD_SINGLE_THREAD_P)
++	THREAD_GSCOPE_WAIT ();
++
++      free (old_global);
+     }
+ 
+   /* Now add the new entries.  */
++  unsigned int new_nlist = ns->_ns_main_searchlist->r_nlist;
+   for (cnt = 0; cnt < new->l_searchlist.r_nlist; ++cnt)
+     {
+       struct link_map *map = new->l_searchlist.r_list[cnt];
+@@ -144,11 +156,11 @@ add_to_global (struct link_map *new)
+       if (map->l_global == 0)
+ 	{
+ 	  map->l_global = 1;
+-	  GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_list[GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_nlist]
+-	    = map;
+-	  ++GL(dl_ns)[new->l_ns]._ns_main_searchlist->r_nlist;
++	  ns->_ns_main_searchlist->r_list[new_nlist++] = map;
+ 	}
+     }
++  atomic_write_barrier ();
++  ns->_ns_main_searchlist->r_nlist = new_nlist;
+ 
+   return 0;
+ }
+@@ -380,6 +392,8 @@ dl_open_worker (void *a)
+ 
+ 	  while (*runp != NULL)
+ 	    {
++	      if (*runp == &new->l_searchlist)
++		break;
+ 	      ++cnt;
+ 	      ++runp;
+ 	    }
+@@ -392,35 +406,52 @@ dl_open_worker (void *a)
+ 	    {
+ 	      /* The 'r_scope' array is too small.  Allocate a new one
+ 		 dynamically.  */
++	      size_t new_size;
+ 	      struct r_scope_elem **newp;
+-	      size_t new_size = imap->l_scope_max * 2;
+ 
+-	      if (imap->l_scope == imap->l_scope_mem)
++#define SCOPE_ELEMS(imap) \
++  (sizeof (imap->l_scope_mem) / sizeof (imap->l_scope_mem[0]))
++
++	      if (imap->l_scope != imap->l_scope_mem
++		  && imap->l_scope_max < SCOPE_ELEMS (imap))
++		{
++		  new_size = SCOPE_ELEMS (imap);
++		  newp = imap->l_scope_mem;
++		}
++	      else
+ 		{
++		  new_size = imap->l_scope_max * 2;
+ 		  newp = (struct r_scope_elem **)
+ 		    malloc (new_size * sizeof (struct r_scope_elem *));
+ 		  if (newp == NULL)
+ 		    _dl_signal_error (ENOMEM, "dlopen", NULL,
+ 				      N_("cannot create scope list"));
+-		  imap->l_scope = memcpy (newp, imap->l_scope,
+-					  cnt * sizeof (imap->l_scope[0]));
+ 		}
++
++	      memcpy (newp, imap->l_scope, cnt * sizeof (imap->l_scope[0]));
++	      struct r_scope_elem **old = imap->l_scope;
++
++	      if (RTLD_SINGLE_THREAD_P)
++		imap->l_scope = newp;
+ 	      else
+ 		{
+-		  newp = (struct r_scope_elem **)
+-		    realloc (imap->l_scope,
+-			     new_size * sizeof (struct r_scope_elem *));
+-		  if (newp == NULL)
+-		    _dl_signal_error (ENOMEM, "dlopen", NULL,
+-				      N_("cannot create scope list"));
++		  __rtld_mrlock_change (imap->l_scope_lock);
+ 		  imap->l_scope = newp;
++		  __rtld_mrlock_done (imap->l_scope_lock);
+ 		}
+ 
++	      if (old != imap->l_scope_mem)
++		free (old);
++
+ 	      imap->l_scope_max = new_size;
+ 	    }
+ 
+-	  imap->l_scope[cnt++] = &new->l_searchlist;
+-	  imap->l_scope[cnt] = NULL;
++	  /* First terminate the extended list.  Otherwise a thread
++	     might use the new last element and then use the garbage
++	     at offset IDX+1.  */
++	  imap->l_scope[cnt + 1] = NULL;
++	  atomic_write_barrier ();
++	  imap->l_scope[cnt] = &new->l_searchlist;
+ 	}
+ #if USE_TLS
+       /* Only add TLS memory if this object is loaded now and
+--- libc/include/link.h.jj	2007-06-13 11:33:55.000000000 +0200
++++ libc/include/link.h	2007-06-13 11:34:19.000000000 +0200
+@@ -42,7 +42,9 @@ extern unsigned int la_objopen (struct l
+ #include <stddef.h>
+ #include <bits/linkmap.h>
+ #include <dl-lookupcfg.h>
+-#include <tls.h>		/* Defines USE_TLS.  */
++#include <tls.h>
++#include <bits/libc-lock.h>
++#include <rtld-lowlevel.h>
+ 
+ 
+ /* Some internal data structures of the dynamic linker used in the
+@@ -220,6 +222,8 @@ struct link_map
+     /* This is an array defining the lookup scope for this link map.
+        There are initially at most three different scope lists.  */
+     struct r_scope_elem **l_scope;
++    /* We need to protect using the SCOPEREC.  */
++    __rtld_mrlock_define (, l_scope_lock)
+ 
+     /* A similar array, this time only with the local scope.  This is
+        used occasionally.  */
+--- libc/nptl/descr.h.jj	2006-09-24 19:10:55.000000000 +0200
++++ libc/nptl/descr.h	2007-06-13 11:34:26.000000000 +0200
+@@ -131,6 +131,7 @@ struct pthread
+     struct
+     {
+       int multiple_threads;
++      int gscope_flag;
+     } header;
+ #endif
+ 
+--- libc/nptl/allocatestack.c.jj	2006-08-23 19:39:47.000000000 +0200
++++ libc/nptl/allocatestack.c	2007-06-13 11:34:26.000000000 +0200
+@@ -982,3 +982,60 @@ __pthread_init_static_tls (struct link_m
+ 
+   lll_unlock (stack_cache_lock);
+ }
++
++
++void
++attribute_hidden
++__wait_lookup_done (void)
++{
++  lll_lock (stack_cache_lock);
++
++  struct pthread *self = THREAD_SELF;
++
++  /* Iterate over the list with system-allocated threads first.  */
++  list_t *runp;
++  list_for_each (runp, &stack_used)
++    {
++      struct pthread *t = list_entry (runp, struct pthread, list);
++      if (t == self || t->header.gscope_flag == THREAD_GSCOPE_FLAG_UNUSED)
++	continue;
++
++      int *const gscope_flagp = &t->header.gscope_flag;
++
++      /* We have to wait until this thread is done with the global
++	 scope.  First tell the thread that we are waiting and
++	 possibly have to be woken.  */
++      if (atomic_compare_and_exchange_bool_acq (gscope_flagp,
++						THREAD_GSCOPE_FLAG_WAIT,
++						THREAD_GSCOPE_FLAG_USED))
++	continue;
++
++      do
++	lll_futex_wait (gscope_flagp, THREAD_GSCOPE_FLAG_WAIT);
++      while (*gscope_flagp == THREAD_GSCOPE_FLAG_WAIT);
++    }
++
++  /* Now the list with threads using user-allocated stacks.  */
++  list_for_each (runp, &__stack_user)
++    {
++      struct pthread *t = list_entry (runp, struct pthread, list);
++      if (t == self || t->header.gscope_flag == THREAD_GSCOPE_FLAG_UNUSED)
++	continue;
++
++      int *const gscope_flagp = &t->header.gscope_flag;
++
++      /* We have to wait until this thread is done with the global
++	 scope.  First tell the thread that we are waiting and
++	 possibly have to be woken.  */
++      if (atomic_compare_and_exchange_bool_acq (gscope_flagp,
++						THREAD_GSCOPE_FLAG_WAIT,
++						THREAD_GSCOPE_FLAG_USED))
++	continue;
++
++      do
++	lll_futex_wait (gscope_flagp, THREAD_GSCOPE_FLAG_WAIT);
++      while (*gscope_flagp == THREAD_GSCOPE_FLAG_WAIT);
++    }
++
++  lll_unlock (stack_cache_lock);
++}
+--- libc/nptl/init.c.jj	2006-08-23 19:41:31.000000000 +0200
++++ libc/nptl/init.c	2007-06-13 11:34:26.000000000 +0200
+@@ -386,6 +386,8 @@ __pthread_initialize_minimal_internal (v
+ 
+   GL(dl_init_static_tls) = &__pthread_init_static_tls;
+ 
++  GL(dl_wait_lookup_done) = &__wait_lookup_done;
++
+   /* Register the fork generation counter with the libc.  */
+ #ifndef TLS_MULTIPLE_THREADS_IN_TCB
+   __libc_multiple_threads_ptr =
+--- libc/nptl/pthreadP.h.jj	2006-08-23 19:42:52.000000000 +0200
++++ libc/nptl/pthreadP.h	2007-06-13 11:34:26.000000000 +0200
+@@ -545,6 +545,8 @@ extern int __nptl_setxid (struct xid_com
+ 
+ extern void __free_stack_cache (void) attribute_hidden;
+ 
++extern void __wait_lookup_done (void) attribute_hidden;
++
+ #ifdef SHARED
+ # define PTHREAD_STATIC_FN_REQUIRE(name)
+ #else
+--- libc/nptl/sysdeps/alpha/tls.h.jj	2006-01-13 22:38:17.000000000 +0100
++++ libc/nptl/sysdeps/alpha/tls.h	2007-06-13 11:34:26.000000000 +0200
+@@ -124,6 +124,29 @@ typedef struct
+ #define THREAD_SETMEM_NC(descr, member, idx, value) \
+   descr->member[idx] = (value)
+ 
++/* Get and set the global scope generation counter in struct pthread.  */
++#define THREAD_GSCOPE_FLAG_UNUSED 0
++#define THREAD_GSCOPE_FLAG_USED   1
++#define THREAD_GSCOPE_FLAG_WAIT   2
++#define THREAD_GSCOPE_RESET_FLAG() \
++  do									     \
++    { int __res								     \
++	= atomic_exchange_rel (&THREAD_SELF->header.gscope_flag,	     \
++			       THREAD_GSCOPE_FLAG_UNUSED);		     \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				     \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1);		     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_SET_FLAG() \
++  do									     \
++    {									     \
++      THREAD_SELF->header.gscope_flag = THREAD_GSCOPE_FLAG_USED;	     \
++      atomic_write_barrier ();						     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
+ #endif /* __ASSEMBLER__ */
+ 
+ #endif	/* tls.h */
+--- libc/nptl/sysdeps/ia64/tls.h.jj	2006-01-06 22:46:10.000000000 +0100
++++ libc/nptl/sysdeps/ia64/tls.h	2007-06-13 11:34:26.000000000 +0200
+@@ -166,6 +166,29 @@ register struct pthread *__thread_self _
+   (((uintptr_t *) ((char *) (descr) + TLS_PRE_TCB_SIZE))[-2] \
+    = THREAD_GET_POINTER_GUARD ())
+ 
++/* Get and set the global scope generation counter in struct pthread.  */
++#define THREAD_GSCOPE_FLAG_UNUSED 0
++#define THREAD_GSCOPE_FLAG_USED   1
++#define THREAD_GSCOPE_FLAG_WAIT   2
++#define THREAD_GSCOPE_RESET_FLAG() \
++  do									     \
++    { int __res								     \
++	= atomic_exchange_rel (&THREAD_SELF->header.gscope_flag,	     \
++			       THREAD_GSCOPE_FLAG_UNUSED);		     \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				     \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1);		     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_SET_FLAG() \
++  do									     \
++    {									     \
++      THREAD_SELF->header.gscope_flag = THREAD_GSCOPE_FLAG_USED;	     \
++      atomic_write_barrier ();						     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
+ #endif /* __ASSEMBLER__ */
+ 
+ #endif	/* tls.h */
+--- libc/nptl/sysdeps/i386/tls.h.jj	2005-12-18 07:57:32.000000000 +0100
++++ libc/nptl/sysdeps/i386/tls.h	2007-06-13 11:34:26.000000000 +0200
+@@ -51,6 +51,7 @@ typedef struct
+   uintptr_t sysinfo;
+   uintptr_t stack_guard;
+   uintptr_t pointer_guard;
++  int gscope_flag;
+ } tcbhead_t;
+ 
+ # define TLS_MULTIPLE_THREADS_IN_TCB 1
+@@ -434,6 +435,26 @@ union user_desc_init
+    = THREAD_GETMEM (THREAD_SELF, header.pointer_guard))
+ 
+ 
++/* Get and set the global scope generation counter in the TCB head.  */
++#define THREAD_GSCOPE_FLAG_UNUSED 0
++#define THREAD_GSCOPE_FLAG_USED   1
++#define THREAD_GSCOPE_FLAG_WAIT   2
++#define THREAD_GSCOPE_RESET_FLAG() \
++  do									      \
++    { int __res;							      \
++      asm volatile ("xchgl %0, %%gs:%P1"				      \
++		    : "=r" (__res)					      \
++		    : "i" (offsetof (struct pthread, header.gscope_flag)),    \
++		      "0" (THREAD_GSCOPE_FLAG_UNUSED));			      \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				      \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1);		      \
++    }									      \
++  while (0)
++#define THREAD_GSCOPE_SET_FLAG() \
++  THREAD_SETMEM (THREAD_SELF, header.gscope_flag, THREAD_GSCOPE_FLAG_USED)
++#define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
+ #endif /* __ASSEMBLER__ */
+ 
+ #endif	/* tls.h */
+--- libc/nptl/sysdeps/s390/tls.h.jj	2005-12-20 07:46:06.000000000 +0100
++++ libc/nptl/sysdeps/s390/tls.h	2007-06-13 11:34:26.000000000 +0200
+@@ -50,6 +50,7 @@ typedef struct
+   int multiple_threads;
+   uintptr_t sysinfo;
+   uintptr_t stack_guard;
++  int gscope_flag;
+ } tcbhead_t;
+ 
+ # ifndef __s390x__
+@@ -171,6 +172,29 @@ typedef struct
+ #define THREAD_SET_POINTER_GUARD(value)
+ #define THREAD_COPY_POINTER_GUARD(descr)
+ 
++/* Get and set the global scope generation counter in struct pthread.  */
++#define THREAD_GSCOPE_FLAG_UNUSED 0
++#define THREAD_GSCOPE_FLAG_USED   1
++#define THREAD_GSCOPE_FLAG_WAIT   2
++#define THREAD_GSCOPE_RESET_FLAG() \
++  do									     \
++    { int __res								     \
++	= atomic_exchange_rel (&THREAD_SELF->header.gscope_flag,	     \
++			       THREAD_GSCOPE_FLAG_UNUSED);		     \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				     \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1);		     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_SET_FLAG() \
++  do									     \
++    {									     \
++      THREAD_SELF->header.gscope_flag = THREAD_GSCOPE_FLAG_USED;	     \
++      atomic_write_barrier ();						     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
+ #endif /* __ASSEMBLER__ */
+ 
+ #endif	/* tls.h */
+--- libc/nptl/sysdeps/powerpc/tls.h.jj	2005-12-20 07:44:40.000000000 +0100
++++ libc/nptl/sysdeps/powerpc/tls.h	2007-06-13 11:34:26.000000000 +0200
+@@ -183,6 +183,29 @@ register void *__thread_register __asm__
+    different value to mean unset l_tls_offset.  */
+ # define NO_TLS_OFFSET		-1
+ 
++/* Get and set the global scope generation counter in struct pthread.  */
++#define THREAD_GSCOPE_FLAG_UNUSED 0
++#define THREAD_GSCOPE_FLAG_USED   1
++#define THREAD_GSCOPE_FLAG_WAIT   2
++#define THREAD_GSCOPE_RESET_FLAG() \
++  do									     \
++    { int __res								     \
++	= atomic_exchange_rel (&THREAD_SELF->header.gscope_flag,	     \
++			       THREAD_GSCOPE_FLAG_UNUSED);		     \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				     \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1);		     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_SET_FLAG() \
++  do									     \
++    {									     \
++      THREAD_SELF->header.gscope_flag = THREAD_GSCOPE_FLAG_USED;	     \
++      atomic_write_barrier ();						     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
+ #endif /* __ASSEMBLER__ */
+ 
+ #endif	/* tls.h */
+--- libc/nptl/sysdeps/x86_64/tls.h.jj	2006-04-27 03:25:34.000000000 +0200
++++ libc/nptl/sysdeps/x86_64/tls.h	2007-06-13 11:39:47.000000000 +0200
+@@ -47,6 +47,7 @@ typedef struct
+   dtv_t *dtv;
+   void *self;		/* Pointer to the thread descriptor.  */
+   int multiple_threads;
++  int gscope_flag;
+   uintptr_t sysinfo;
+   uintptr_t stack_guard;
+   uintptr_t pointer_guard;
+@@ -339,6 +340,26 @@ typedef struct
+    = THREAD_GETMEM (THREAD_SELF, header.pointer_guard))
+ 
+ 
++/* Get and set the global scope generation counter in the TCB head.  */
++#define THREAD_GSCOPE_FLAG_UNUSED 0
++#define THREAD_GSCOPE_FLAG_USED   1
++#define THREAD_GSCOPE_FLAG_WAIT   2
++#define THREAD_GSCOPE_RESET_FLAG() \
++  do									      \
++    { int __res;							      \
++      asm volatile ("xchgl %0, %%fs:%P1"				      \
++		    : "=r" (__res)					      \
++		    : "i" (offsetof (struct pthread, header.gscope_flag)),    \
++		      "0" (THREAD_GSCOPE_FLAG_UNUSED));			      \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				      \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1);		      \
++    }									      \
++  while (0)
++#define THREAD_GSCOPE_SET_FLAG() \
++  THREAD_SETMEM (THREAD_SELF, header.gscope_flag, THREAD_GSCOPE_FLAG_USED)
++#define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
+ #endif /* __ASSEMBLER__ */
+ 
+ #endif	/* tls.h */
+--- libc/nptl/sysdeps/sparc/tls.h.jj	2006-01-02 21:55:23.000000000 +0100
++++ libc/nptl/sysdeps/sparc/tls.h	2007-06-13 11:34:26.000000000 +0200
+@@ -144,6 +144,29 @@ register struct pthread *__thread_self _
+ # define THREAD_COPY_POINTER_GUARD(descr) \
+   ((descr)->header.pointer_guard = THREAD_GET_POINTER_GUARD ())
+ 
++/* Get and set the global scope generation counter in struct pthread.  */
++#define THREAD_GSCOPE_FLAG_UNUSED 0
++#define THREAD_GSCOPE_FLAG_USED   1
++#define THREAD_GSCOPE_FLAG_WAIT   2
++#define THREAD_GSCOPE_RESET_FLAG() \
++  do									     \
++    { int __res								     \
++	= atomic_exchange_rel (&THREAD_SELF->header.gscope_flag,	     \
++			       THREAD_GSCOPE_FLAG_UNUSED);		     \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				     \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1);		     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_SET_FLAG() \
++  do									     \
++    {									     \
++      THREAD_SELF->header.gscope_flag = THREAD_GSCOPE_FLAG_USED;	     \
++      atomic_write_barrier ();						     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
+ #endif /* !ASSEMBLER */
+ 
+ #endif	/* tls.h */
+--- libc/nptl/sysdeps/sh/tls.h.jj	2005-12-20 16:24:05.000000000 +0100
++++ libc/nptl/sysdeps/sh/tls.h	2007-06-13 11:34:26.000000000 +0200
+@@ -153,6 +153,29 @@ typedef struct
+      __asm __volatile ("stc gbr,%0" : "=r" (__tcbp));			      \
+      ((tcbhead_t *) (descr + 1))->pointer_guard	= __tcbp->pointer_guard;})
+ 
++/* Get and set the global scope generation counter in struct pthread.  */
++#define THREAD_GSCOPE_FLAG_UNUSED 0
++#define THREAD_GSCOPE_FLAG_USED   1
++#define THREAD_GSCOPE_FLAG_WAIT   2
++#define THREAD_GSCOPE_RESET_FLAG() \
++  do									     \
++    { int __res								     \
++	= atomic_exchange_rel (&THREAD_SELF->header.gscope_flag,	     \
++			       THREAD_GSCOPE_FLAG_UNUSED);		     \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				     \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1);		     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_SET_FLAG() \
++  do									     \
++    {									     \
++      THREAD_SELF->header.gscope_flag = THREAD_GSCOPE_FLAG_USED;	     \
++      atomic_write_barrier ();						     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
+ #endif /* __ASSEMBLER__ */
+ 
+ #endif	/* tls.h */
+--- libc/nptl/sysdeps/unix/sysv/linux/alpha/sysdep-cancel.h.jj	2004-09-06 03:12:02.000000000 +0200
++++ libc/nptl/sysdeps/unix/sysv/linux/alpha/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -167,3 +167,9 @@ extern int __local_multiple_threads attr
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/ia64/sysdep-cancel.h.jj	2004-07-06 06:25:45.000000000 +0200
++++ libc/nptl/sysdeps/unix/sysv/linux/ia64/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -220,3 +220,9 @@ __GC_##name:								      \
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/rtld-lowlevel.h.jj	2007-06-13 12:56:51.000000000 +0200
++++ libc/nptl/sysdeps/unix/sysv/linux/rtld-lowlevel.h	2007-06-13 12:57:34.000000000 +0200
+@@ -0,0 +1,153 @@
++/* Defintions for lowlevel handling in ld.so.
++   Copyright (C) 2006, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _RTLD_LOWLEVEL_H
++#define  _RTLD_LOWLEVEL_H 1
++
++#include <atomic.h>
++#include <lowlevellock.h>
++
++
++/* Special multi-reader lock used in ld.so.  */
++#define __RTLD_MRLOCK_WRITER 1
++#define __RTLD_MRLOCK_RWAIT 2
++#define __RTLD_MRLOCK_WWAIT 4
++#define __RTLD_MRLOCK_RBITS \
++  ~(__RTLD_MRLOCK_WRITER | __RTLD_MRLOCK_RWAIT | __RTLD_MRLOCK_WWAIT)
++#define __RTLD_MRLOCK_INC 8
++#define __RTLD_MRLOCK_TRIES 5
++
++
++typedef int __rtld_mrlock_t;
++
++
++#define __rtld_mrlock_define(CLASS,NAME) \
++  CLASS __rtld_mrlock_t NAME;
++
++
++#define _RTLD_MRLOCK_INITIALIZER 0
++#define __rtld_mrlock_initialize(NAME) \
++  (void) ((NAME) = 0)
++
++
++#define __rtld_mrlock_lock(lock) \
++  do {									      \
++    __label__ out;							      \
++    while (1)								      \
++      {									      \
++	int oldval;							      \
++	for (int tries = 0; tries < __RTLD_MRLOCK_TRIES; ++tries)	      \
++	  {								      \
++	    oldval = lock;						      \
++	    while (__builtin_expect ((oldval				      \
++				      & (__RTLD_MRLOCK_WRITER		      \
++					 | __RTLD_MRLOCK_WWAIT))	      \
++				     == 0, 1))				      \
++	      {								      \
++		int newval = ((oldval & __RTLD_MRLOCK_RBITS)		      \
++			      + __RTLD_MRLOCK_INC);			      \
++		int ret = atomic_compare_and_exchange_val_acq (&(lock),	      \
++							       newval,	      \
++							       oldval);	      \
++		if (__builtin_expect (ret == oldval, 1))		      \
++		  goto out;						      \
++		oldval = ret;						      \
++	      }								      \
++	    atomic_delay ();						      \
++	  }								      \
++	if ((oldval & __RTLD_MRLOCK_RWAIT) == 0)			      \
++	  {								      \
++	    atomic_or (&(lock), __RTLD_MRLOCK_RWAIT);			      \
++	    oldval |= __RTLD_MRLOCK_RWAIT;				      \
++	  }								      \
++	lll_futex_wait (lock, oldval);					      \
++      }									      \
++  out:;									      \
++  } while (0)
++
++
++#define __rtld_mrlock_unlock(lock) \
++  do {									      \
++    int oldval = atomic_exchange_and_add (&(lock), -__RTLD_MRLOCK_INC);	      \
++    if (__builtin_expect ((oldval					      \
++			   & (__RTLD_MRLOCK_RBITS | __RTLD_MRLOCK_WWAIT))     \
++			  == (__RTLD_MRLOCK_INC | __RTLD_MRLOCK_WWAIT), 0))   \
++      /* We have to wake all threads since there might be some queued	      \
++	 readers already.  */						      \
++      lll_futex_wake (&(lock), 0x7fffffff);				      \
++  } while (0)
++
++
++/* There can only ever be one thread trying to get the exclusive lock.  */
++#define __rtld_mrlock_change(lock) \
++  do {									      \
++    __label__ out;							      \
++    while (1)								      \
++      {									      \
++	int oldval;							      \
++	for (int tries = 0; tries < __RTLD_MRLOCK_TRIES; ++tries)	      \
++	  {								      \
++	    oldval = lock;						      \
++	    while (__builtin_expect ((oldval & __RTLD_MRLOCK_RBITS) == 0, 1)) \
++	      {								      \
++		int newval = ((oldval & __RTLD_MRLOCK_RWAIT)		      \
++			      + __RTLD_MRLOCK_WRITER);			      \
++		int ret = atomic_compare_and_exchange_val_acq (&(lock),	      \
++							       newval,	      \
++							       oldval);	      \
++		if (__builtin_expect (ret == oldval, 1))		      \
++		  goto out;						      \
++		oldval = ret;						      \
++	      }								      \
++	    atomic_delay ();						      \
++	  }								      \
++	atomic_or (&(lock), __RTLD_MRLOCK_WWAIT);			      \
++	oldval |= __RTLD_MRLOCK_WWAIT;					      \
++	lll_futex_wait (lock, oldval);					      \
++      }									      \
++  out:;									      \
++  } while (0)
++
++
++#define __rtld_mrlock_done(lock) \
++  do {				 \
++    int oldval = atomic_exchange_and_add (&(lock), -__RTLD_MRLOCK_WRITER);    \
++    if (__builtin_expect ((oldval & __RTLD_MRLOCK_RWAIT) != 0, 0))	      \
++      lll_futex_wake (&(lock), 0x7fffffff);				      \
++  } while (0)
++
++
++/* Function to wait for variable become zero.  Used in ld.so for
++   reference counters.  */
++#define __rtld_waitzero(word) \
++  do {									      \
++    while (1)								      \
++      {									      \
++	int val = word;							      \
++	if (val == 0)							      \
++	  break;							      \
++	lll_futex_wait (&(word), val);					      \
++      }									      \
++  } while (0)
++
++
++#define __rtld_notify(word) \
++  lll_futex_wake (&(word), 1)
++
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/i386/sysdep-cancel.h.jj	2005-05-04 00:58:41.000000000 +0200
++++ libc/nptl/sysdeps/unix/sysv/linux/i386/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -137,3 +137,9 @@
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/s390/s390-32/sysdep-cancel.h.jj	2004-07-06 06:25:44.000000000 +0200
++++ libc/nptl/sysdeps/unix/sysv/linux/s390/s390-32/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -113,3 +113,9 @@ L(pseudo_end):
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/s390/s390-64/sysdep-cancel.h.jj	2004-07-06 06:25:44.000000000 +0200
++++ libc/nptl/sysdeps/unix/sysv/linux/s390/s390-64/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -126,3 +126,9 @@ extern int __local_multiple_threads attr
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/powerpc/powerpc64/sysdep-cancel.h.jj	2006-01-04 21:03:07.000000000 +0100
++++ libc/nptl/sysdeps/unix/sysv/linux/powerpc/powerpc64/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -117,3 +117,9 @@
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/powerpc/powerpc32/sysdep-cancel.h.jj	2006-01-04 21:03:07.000000000 +0100
++++ libc/nptl/sysdeps/unix/sysv/linux/powerpc/powerpc32/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -128,3 +128,9 @@
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/x86_64/sysdep-cancel.h.jj	2005-03-31 12:00:15.000000000 +0200
++++ libc/nptl/sysdeps/unix/sysv/linux/x86_64/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -136,3 +136,9 @@ extern int __local_multiple_threads attr
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/sparc/sparc32/sysdep-cancel.h.jj	2006-03-06 02:34:01.000000000 +0100
++++ libc/nptl/sysdeps/unix/sysv/linux/sparc/sparc32/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -104,3 +104,9 @@ __##syscall_name##_nocancel:			\
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/sparc/sparc64/sysdep-cancel.h.jj	2006-03-06 02:34:01.000000000 +0100
++++ libc/nptl/sysdeps/unix/sysv/linux/sparc/sparc64/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -102,3 +102,9 @@ __##syscall_name##_nocancel:			\
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/nptl/sysdeps/unix/sysv/linux/sh/sysdep-cancel.h.jj	2005-12-30 23:18:03.000000000 +0100
++++ libc/nptl/sysdeps/unix/sysv/linux/sh/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -161,3 +161,9 @@
+ # define NO_CANCELLATION 1
+ 
+ #endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+--- libc/sysdeps/generic/rtld-lowlevel.h.jj	2007-06-13 11:34:26.000000000 +0200
++++ libc/sysdeps/generic/rtld-lowlevel.h	2007-06-13 12:56:19.000000000 +0200
+@@ -0,0 +1 @@
++#error "Lowlevel primitives for ld.so not implemented"
+--- libc/sysdeps/generic/ldsodefs.h.jj	2006-08-24 22:27:05.000000000 +0200
++++ libc/sysdeps/generic/ldsodefs.h	2007-06-13 11:34:26.000000000 +0200
+@@ -38,6 +38,7 @@
+ #include <bits/libc-lock.h>
+ #include <hp-timing.h>
+ #include <tls.h>
++#include <rtld-lowlevel.h>
+ 
+ __BEGIN_DECLS
+ 
+@@ -376,8 +377,6 @@ struct rtld_global
+     struct link_map *_ns_loaded;
+     /* Number of object in the _dl_loaded list.  */
+     unsigned int _ns_nloaded;
+-    /* Array representing global scope.  */
+-    struct r_scope_elem *_ns_global_scope[2];
+     /* Direct pointer to the searchlist of the main object.  */
+     struct r_scope_elem *_ns_main_searchlist;
+     /* This is zero at program start to signal that the global scope map is
+@@ -493,6 +492,8 @@ struct rtld_global
+   EXTERN void (*_dl_init_static_tls) (struct link_map *);
+ #endif
+ 
++  EXTERN void (*_dl_wait_lookup_done) (void);
++
+ #ifdef SHARED
+ };
+ # define __rtld_global_attribute__
+@@ -853,7 +854,9 @@ enum
+     DL_LOOKUP_ADD_DEPENDENCY = 1,
+     /* Return most recent version instead of default version for
+        unversioned lookup.  */
+-    DL_LOOKUP_RETURN_NEWEST = 2
++    DL_LOOKUP_RETURN_NEWEST = 2,
++    /* Set if the scopr lock in the UNDEF_MAP is taken.  */
++    DL_LOOKUP_SCOPE_LOCK = 4
+   };
+ 
+ /* Lookup versioned symbol.  */
+--- libc/sysdeps/generic/sysdep-cancel.h.jj	2003-01-07 01:12:06.000000000 +0100
++++ libc/sysdeps/generic/sysdep-cancel.h	2007-06-13 11:34:26.000000000 +0200
+@@ -2,6 +2,7 @@
+ 
+ /* No multi-thread handling enabled.  */
+ #define SINGLE_THREAD_P (1)
++#define RTLD_SINGLE_THREAD_P (1)
+ #define LIBC_CANCEL_ASYNC()	0 /* Just a dummy value.  */
+ #define LIBC_CANCEL_RESET(val)	((void)(val)) /* Nothing, but evaluate it.  */
+ #define LIBC_CANCEL_HANDLED()	/* Nothing.  */

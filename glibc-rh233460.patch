@@ -1,0 +1,725 @@
+2007-04-05  Jakub Jelinek  <jakub@redhat.com>
+
+	* nis/nis_call.c (__nisfind_server): Replace (*dir)->do_servers
+	with obj->do_servers after first_shoot.
+
+2007-03-21  Jakub Jelinek  <jakub@redhat.com>
+
+	* nis/nis_call.c: Include bits/libc-lock.h, sys/stat.h, unistd.h.
+	(nis_server_cache, nis_server_cache_lock, nis_cold_start_mtime): New
+	variables.
+	(nis_server_cache_search, nis_server_cache_add): New functions.
+	(__nisfind_server): Use them.  Add dbp and flags argument, if
+	call __nisbind_create.
+	(__nisbind_create): Add server_used and current_ep arguments,
+	only call __nis_findfastest if server_used is ~0.
+	(__do_niscall2, __prepare_niscall): Adjust callers.
+	(ckey_cache, ckey_cache_size, ckey_cache_allocated, ckey_cache_pid,
+	ckey_cache_euid, ckey_cache_lock): New variables.
+	(get_ckey): New function.
+	(__nisbind_connect): If not dbp->use_udp, pass IPPROTO_TCP to
+	__pmap_getnisport.  Save __pmap_getnisport result in
+	dbp->addr.sin_port if non-zero.  Use get_ckey to create conversation
+	key.
+	* nis/nis_lookup.c (nis_lookup): Likewise.
+	* nis/nis_table.c (nis_list): Likewise.
+	* nis/rpcsvc/nislib.h (__nisbind_create, __nisfind_server): Adjust
+	prototypes.
+
+	* nis/nss_nisplus/nisplus-pwd.c (_nss_nisplus_getpwnam_r,
+	_nss_nisplus_getpwuid_r): Pass USE_DGRAM flag to nis_list.
+	* nis/nss_nisplus/nisplus-service.c (_nss_nisplus_getservbyname_r,
+	_nss_nisplus_getservbyport_r): Likewise.
+	* nis/nss_nisplus/nisplus-network.c (_nss_nisplus_getnetbyname_r,
+	_nss_nisplus_getnetbyaddr_r): Likewise.
+	* nis/nss_nisplus/nisplus-spwd.c (_nss_nisplus_getspnam_r): Likewise.
+	* nis/nss_nisplus/nisplus-ethers.c (_nss_nisplus_gethostton_r,
+	_nss_nisplus_getntohost_r): Likewise.
+	* nis/nss_nisplus/nisplus-rpc.c (_nss_nisplus_getrpcbyname_r,
+	_nss_nisplus_getrpcbynumber_r): Likewise.
+
+--- libc/nis/nis_call.c	7 Aug 2006 17:39:39 -0000	1.47
++++ libc/nis/nis_call.c	5 Apr 2007 13:59:03 -0000	1.49
+@@ -25,8 +26,11 @@
+ #include <rpc/auth.h>
+ #include <rpcsvc/nis.h>
+ #include <sys/socket.h>
++#include <sys/stat.h>
++#include <unistd.h>
+ #include <netinet/in.h>
+ #include <arpa/inet.h>
++#include <bits/libc-lock.h>
+ 
+ #include "nis_xdr.h"
+ #include "nis_intern.h"
+@@ -107,10 +111,79 @@ __nisbind_next (dir_binding *bind)
+ }
+ libnsl_hidden_def (__nisbind_next)
+ 
++static struct ckey_cache_entry
++{
++  struct in_addr inaddr;
++  in_port_t port;
++  unsigned int protocol;
++  des_block ckey;
++} *ckey_cache;
++static size_t ckey_cache_size;
++static size_t ckey_cache_allocated;
++static pid_t ckey_cache_pid;
++static uid_t ckey_cache_euid;
++__libc_lock_define_initialized (static, ckey_cache_lock)
++
++static bool_t
++get_ckey (des_block *ckey, struct sockaddr_in *addr, unsigned int protocol)
++{
++  size_t i;
++  pid_t pid = getpid ();
++  uid_t euid = geteuid ();
++  bool_t ret = FALSE;
++
++  __libc_lock_lock (ckey_cache_lock);
++
++  if (ckey_cache_pid != pid || ckey_cache_euid != euid)
++    {
++      ckey_cache_size = 0;
++      ckey_cache_pid = pid;
++      ckey_cache_euid = euid;
++    }
++
++  for (i = 0; i < ckey_cache_size; ++i)
++    if (ckey_cache[i].port == addr->sin_port
++	&& ckey_cache[i].protocol == protocol
++	&& memcmp (&ckey_cache[i].inaddr, &addr->sin_addr,
++		   sizeof (addr->sin_addr)) == 0)
++      {
++	*ckey = ckey_cache[i].ckey;
++	ret = TRUE;
++	break;
++      }
++
++  if (!ret && key_gendes (ckey) >= 0)
++    {
++      ret = TRUE;
++      /* Don't grow the cache indefinitely.  */
++      if (ckey_cache_size == 256)
++	ckey_cache_size = 0;
++      if (ckey_cache_size == ckey_cache_allocated)
++	{
++	  size_t size = ckey_cache_allocated ? ckey_cache_allocated * 2 : 16;
++	  struct ckey_cache_entry *new_cache
++	    = realloc (ckey_cache, size * sizeof (*ckey_cache));
++	  if (new_cache != NULL)
++	    {
++	      ckey_cache = new_cache;
++	      ckey_cache_allocated = size;
++	    }
++	}
++      ckey_cache[ckey_cache_size].inaddr = addr->sin_addr;
++      ckey_cache[ckey_cache_size].port = addr->sin_port;
++      ckey_cache[ckey_cache_size].protocol = protocol;
++      ckey_cache[ckey_cache_size++].ckey = *ckey;
++    }
++
++  __libc_lock_unlock (ckey_cache_lock);
++  return ret;
++}
++
+ nis_error
+ __nisbind_connect (dir_binding *dbp)
+ {
+   nis_server *serv;
++  u_short port;
+ 
+   if (dbp == NULL)
+     return NIS_FAIL;
+@@ -128,9 +201,12 @@ __nisbind_connect (dir_binding *dbp)
+ 
+   /* Check, if the host is online and rpc.nisd is running. Much faster
+      then the clnt*_create functions: */
+-  if (__pmap_getnisport (&dbp->addr, NIS_PROG, NIS_VERSION, IPPROTO_UDP) == 0)
++  port = __pmap_getnisport (&dbp->addr, NIS_PROG, NIS_VERSION,
++			    dbp->use_udp ? IPPROTO_UDP : IPPROTO_TCP);
++  if (port == 0)
+     return NIS_RPCERROR;
+ 
++  dbp->addr.sin_port = htons (port);
+   dbp->socket = RPC_ANYSOCK;
+   if (dbp->use_udp)
+     dbp->clnt = clntudp_create (&dbp->addr, NIS_PROG, NIS_VERSION,
+@@ -153,17 +229,16 @@ __nisbind_connect (dir_binding *dbp)
+ 	{
+ 	  char netname[MAXNETNAMELEN + 1];
+ 	  char *p;
++	  des_block ckey;
+ 
+-	  p = stpcpy (netname, "unix.");
++	  p = stpcpy (netname, "unix@");
+ 	  strncpy (p, serv->name, MAXNETNAMELEN - 5);
+ 	  netname[MAXNETNAMELEN] = '\0';
+-	  // XXX What is this supposed to do?  If we really want to replace
+-	  // XXX the first dot, then we might as well use unix@ as the
+-	  // XXX prefix string.  --drepper
+-	  p = strchr (netname, '.');
+-	  *p = '@';
+-	  dbp->clnt->cl_auth =
+-	    authdes_pk_create (netname, &serv->pkey, 300, NULL, NULL);
++	  dbp->clnt->cl_auth = NULL;
++	  if (get_ckey (&ckey, &dbp->addr,
++			dbp->use_udp ? IPPROTO_UDP : IPPROTO_TCP))
++	    dbp->clnt->cl_auth =
++	      authdes_pk_create (netname, &serv->pkey, 300, NULL, &ckey);
+ 	  if (!dbp->clnt->cl_auth)
+ 	    dbp->clnt->cl_auth = authunix_create_default ();
+ 	}
+@@ -177,7 +252,8 @@ libnsl_hidden_def (__nisbind_connect)
+ 
+ nis_error
+ __nisbind_create (dir_binding *dbp, const nis_server *serv_val,
+-		  unsigned int serv_len, unsigned int flags)
++		  unsigned int serv_len, unsigned int server_used,
++		  unsigned int current_ep, unsigned int flags)
+ {
+   dbp->clnt = NULL;
+ 
+@@ -203,8 +279,16 @@ __nisbind_create (dir_binding *dbp, cons
+   dbp->trys = 1;
+ 
+   dbp->class = -1;
+-  if (__nis_findfastest (dbp) < 1)
+-    return NIS_NAMEUNREACHABLE;
++  if (server_used == ~0)
++    {
++      if (__nis_findfastest (dbp) < 1)
++	return NIS_NAMEUNREACHABLE;
++    }
++  else
++    {
++      dbp->server_used = server_used;
++      dbp->current_ep = current_ep;
++    }
+ 
+   return NIS_SUCCESS;
+ }
+@@ -306,7 +390,7 @@ __do_niscall2 (const nis_server *server,
+   if (flags & MASTER_ONLY)
+     server_len = 1;
+ 
+-  status = __nisbind_create (&dbp, server, server_len, flags);
++  status = __nisbind_create (&dbp, server, server_len, ~0, ~0, flags);
+   if (status != NIS_SUCCESS)
+     return status;
+ 
+@@ -499,42 +583,221 @@ first_shoot (const_nis_name name, int se
+   return obj;
+ }
+ 
++static struct nis_server_cache
++{
++  int search_parent_first;
++  int uses;
++  unsigned int size;
++  unsigned int server_used;
++  unsigned int current_ep;
++  time_t expires;
++  char name[];
++} *nis_server_cache[16];
++static time_t nis_cold_start_mtime;
++__libc_lock_define_initialized (static, nis_server_cache_lock)
++
++static directory_obj *
++nis_server_cache_search (const_nis_name name, int search_parent_first,
++			 unsigned int *server_used, unsigned int *current_ep,
++			 struct timeval *now)
++{
++  directory_obj *ret = NULL;
++  int i;
++  char *addr;
++  XDR xdrs;
++  struct stat64 st;
++
++  if (stat64 ("/var/nis/NIS_COLD_START", &st) < 0)
++    st.st_mtime = nis_cold_start_mtime + 1;
++
++  __libc_lock_lock (nis_server_cache_lock);
++
++  for (i = 0; i < 16; ++i)
++    if (nis_server_cache[i] == NULL)
++      continue;
++    else if (st.st_mtime != nis_cold_start_mtime
++	     || now->tv_sec > nis_server_cache[i]->expires)
++      {
++	free (nis_server_cache[i]);
++	nis_server_cache[i] = NULL;
++      }
++    else if (nis_server_cache[i]->search_parent_first == search_parent_first
++	     && strcmp (nis_server_cache[i]->name, name) == 0)
++      {
++	ret = calloc (1, sizeof (directory_obj));
++	if (ret == NULL)
++	  break;
++
++	addr = rawmemchr (nis_server_cache[i]->name, '\0') + 8;
++	addr = (char *) ((uintptr_t) addr & ~(uintptr_t) 7);
++	xdrmem_create (&xdrs, addr, nis_server_cache[i]->size, XDR_DECODE);
++	if (!_xdr_directory_obj (&xdrs, ret))
++	  {
++	    xdr_destroy (&xdrs);
++	    free (ret);
++	    ret = NULL;
++	    free (nis_server_cache[i]);
++	    nis_server_cache[i] = NULL;
++	    break;
++	  }
++	xdr_destroy (&xdrs);
++	*server_used = nis_server_cache[i]->server_used;
++	*current_ep = nis_server_cache[i]->current_ep;
++	break;
++      }
++
++  nis_cold_start_mtime = st.st_mtime;
++
++  __libc_lock_unlock (nis_server_cache_lock);
++  return ret;
++}
++
++static void
++nis_server_cache_add (const_nis_name name, int search_parent_first,
++		      directory_obj *dir, unsigned int server_used,
++		      unsigned int current_ep, struct timeval *now)
++{
++  struct nis_server_cache **loc;
++  struct nis_server_cache *new;
++  struct nis_server_cache *old;
++  int i;
++  char *addr;
++  unsigned int size;
++  XDR xdrs;
++
++  if (dir == NULL)
++    return;
++
++  size = xdr_sizeof ((xdrproc_t) _xdr_directory_obj, (char *) dir);
++  new = calloc (1, sizeof (*new) + strlen (name) + 8 + size);
++  if (new == NULL)
++    return;
++  new->search_parent_first = search_parent_first;
++  new->uses = 1;
++  new->expires = now->tv_sec + dir->do_ttl;
++  new->size = size;
++  new->server_used = server_used;
++  new->current_ep = current_ep;
++  addr = stpcpy (new->name, name) + 8;
++  addr = (char *) ((uintptr_t) addr & ~(uintptr_t) 7);
++
++  xdrmem_create(&xdrs, addr, size, XDR_ENCODE);
++  if (!_xdr_directory_obj (&xdrs, dir))
++    {
++      xdr_destroy (&xdrs);
++      free (new);
++      return;
++    }
++  xdr_destroy (&xdrs);
++
++  __libc_lock_lock (nis_server_cache_lock);
++
++  /* Choose which entry should be evicted from the cache.  */
++  loc = &nis_server_cache[0];
++  if (*loc != NULL)
++    for (i = 1; i < 16; ++i)
++      if (nis_server_cache[i] == NULL)
++	{
++	  loc = &nis_server_cache[i];
++	  break;
++	}
++      else if ((*loc)->uses > nis_server_cache[i]->uses
++	       || ((*loc)->uses == nis_server_cache[i]->uses
++		   && (*loc)->expires > nis_server_cache[i]->expires))
++	loc = &nis_server_cache[i];
++  old = *loc;
++  *loc = new;
++
++  __libc_lock_unlock (nis_server_cache_lock);
++  free (old);
++}
++
+ nis_error
+ __nisfind_server (const_nis_name name, int search_parent_first,
+-		  directory_obj **dir)
++		  directory_obj **dir, dir_binding *dbp, unsigned int flags)
+ {
++  nis_error result = NIS_SUCCESS;
++  nis_error status;
++  directory_obj *obj;
++  struct timeval now;
++  unsigned int server_used = ~0;
++  unsigned int current_ep = ~0;
++
+   if (name == NULL)
+     return NIS_BADNAME;
+ 
+-#if 0
+-  /* Search in local cache. In the moment, we ignore the fastest server */
+-  if (!(flags & NO_CACHE))
+-    dir = __nis_cache_search (name, flags, &cinfo);
+-#endif
++  if (*dir != NULL)
++    return NIS_SUCCESS;
+ 
+-  nis_error result = NIS_SUCCESS;
+-  if (*dir == NULL)
++  (void) gettimeofday (&now, NULL);
++
++  if ((flags & NO_CACHE) == 0)
++    *dir = nis_server_cache_search (name, search_parent_first, &server_used,
++				    &current_ep, &now);
++  if (*dir != NULL)
+     {
+-      nis_error status;
+-      directory_obj *obj;
++      unsigned int server_len = (*dir)->do_servers.do_servers_len;
++      if (flags & MASTER_ONLY)
++	{
++	  server_len = 1;
++	  if (server_used != 0)
++	    {
++	      server_used = ~0;
++	      current_ep = ~0;
++	    }
++	}
++      result = __nisbind_create (dbp, (*dir)->do_servers.do_servers_val,
++				 server_len, server_used, current_ep, flags);
++      if (result != NIS_SUCCESS)
++	{
++	  nis_free_directory (*dir);
++	  *dir = NULL;
++	}
++      return result;
++    }
+ 
+-      *dir = readColdStartFile ();
+-      if (*dir == NULL)
+-	/* No /var/nis/NIS_COLD_START->no NIS+ installed.  */
+-	return NIS_UNAVAIL;
++  *dir = readColdStartFile ();
++  if (*dir == NULL)
++    /* No /var/nis/NIS_COLD_START->no NIS+ installed.  */
++    return NIS_UNAVAIL;
+ 
+-      /* Try at first, if servers in "dir" know our object */
+-      obj = first_shoot (name, search_parent_first, *dir);
++  /* Try at first, if servers in "dir" know our object */
++  obj = first_shoot (name, search_parent_first, *dir);
++  if (obj == NULL)
++    {
++      obj = rec_dirsearch (name, *dir, &status);
+       if (obj == NULL)
++	result = status;
++    }
++
++  if (result == NIS_SUCCESS)
++    {
++      unsigned int server_len = obj->do_servers.do_servers_len;
++      if (flags & MASTER_ONLY)
++	server_len = 1;
++      result = __nisbind_create (dbp, obj->do_servers.do_servers_val,
++				 server_len, ~0, ~0, flags);
++      if (result == NIS_SUCCESS)
+ 	{
+-	  obj = rec_dirsearch (name, *dir, &status);
+-	  if (obj == NULL)
+-	    result = status;
++	  if ((flags & MASTER_ONLY) == 0
++	      || obj->do_servers.do_servers_len == 1)
++	    {
++	      server_used = dbp->server_used;
++	      current_ep = dbp->current_ep;
++	    }
++	  if ((flags & NO_CACHE) == 0)
++	    nis_server_cache_add (name, search_parent_first, obj,
++				  server_used, current_ep, &now);
++	}
++      else
++	{
++	  nis_free_directory (obj);
++	  obj = NULL;
+ 	}
+-
+-      *dir = obj;
+     }
+ 
++  *dir = obj;
++
+   return result;
+ }
+ 
+@@ -543,38 +806,19 @@ nis_error
+ __prepare_niscall (const_nis_name name, directory_obj **dirp,
+ 		   dir_binding *bptrp, unsigned int flags)
+ {
+-  nis_error retcode = __nisfind_server (name, 1, dirp);
++  nis_error retcode = __nisfind_server (name, 1, dirp, bptrp, flags);
+   if (__builtin_expect (retcode != NIS_SUCCESS, 0))
+     return retcode;
+ 
+-  nis_server *server;
+-  u_int server_len;
+-
+-  if (flags & MASTER_ONLY)
+-    {
+-      server = (*dirp)->do_servers.do_servers_val;
+-      server_len = 1;
+-    }
+-  else
+-    {
+-      server = (*dirp)->do_servers.do_servers_val;
+-      server_len = (*dirp)->do_servers.do_servers_len;
+-    }
+-
+-  retcode = __nisbind_create (bptrp, server, server_len, flags);
+-  if (retcode == NIS_SUCCESS)
+-    {
+-      do
+-	if (__nisbind_connect (bptrp) == NIS_SUCCESS)
+-	  return NIS_SUCCESS;
+-      while (__nisbind_next (bptrp) == NIS_SUCCESS);
+-
+-      __nisbind_destroy (bptrp);
+-      memset (bptrp, '\0', sizeof (*bptrp));
++  do
++    if (__nisbind_connect (bptrp) == NIS_SUCCESS)
++      return NIS_SUCCESS;
++  while (__nisbind_next (bptrp) == NIS_SUCCESS);
+ 
+-      retcode = NIS_NAMEUNREACHABLE;
+-    }
++  __nisbind_destroy (bptrp);
++  memset (bptrp, '\0', sizeof (*bptrp));
+ 
++  retcode = NIS_NAMEUNREACHABLE;
+   nis_free_directory (*dirp);
+   *dirp = NULL;
+ 
+--- libc/nis/nis_lookup.c	7 Aug 2006 16:02:48 -0000	1.20
++++ libc/nis/nis_lookup.c	21 Mar 2007 20:24:59 -0000	1.21
+@@ -127,18 +128,10 @@ nis_lookup (const_nis_name name, const u
+ 			/* Otherwise __nisfind_server will not do anything.  */
+ 			dir = NULL;
+ 
+-			if (__nisfind_server (req.ns_name, 1, &dir)
++			if (__nisfind_server (req.ns_name, 1, &dir, &bptr,
++					      flags & ~MASTER_ONLY)
+ 			    != NIS_SUCCESS)
+ 			  goto out;
+-
+-			if (__nisbind_create (&bptr,
+-					      dir->do_servers.do_servers_val,
+-					      dir->do_servers.do_servers_len,
+-					      flags) != NIS_SUCCESS)
+-			  {
+-			    nis_free_directory (dir);
+-			    goto out;
+-			  }
+ 		      }
+ 		    else
+ 		      if (__nisbind_next (&bptr) != NIS_SUCCESS)
+--- libc/nis/nis_table.c	6 Oct 2006 20:31:59 -0000	1.40
++++ libc/nis/nis_table.c	21 Mar 2007 20:24:59 -0000	1.41
+@@ -274,21 +275,14 @@ nis_list (const_nis_name name, unsigned 
+       memset (res, '\0', sizeof (nis_result));
+ 
+       status = __nisfind_server (ibreq->ibr_name,
+-				 ibreq->ibr_srch.ibr_srch_val != NULL, &dir);
++				 ibreq->ibr_srch.ibr_srch_val != NULL,
++				 &dir, &bptr, flags & ~MASTER_ONLY);
+       if (status != NIS_SUCCESS)
+ 	{
+           NIS_RES_STATUS (res) = status;
+           goto fail3;
+ 	}
+ 
+-      status = __nisbind_create (&bptr, dir->do_servers.do_servers_val,
+-				 dir->do_servers.do_servers_len, flags);
+-      if (__builtin_expect (status != NIS_SUCCESS, 0))
+-        {
+-          NIS_RES_STATUS (res) = status;
+-	  goto fail2;
+-        }
+-
+       while (__nisbind_connect (&bptr) != NIS_SUCCESS)
+ 	if (__builtin_expect (__nisbind_next (&bptr) != NIS_SUCCESS, 0))
+ 	  {
+@@ -338,7 +332,6 @@ nis_list (const_nis_name name, unsigned 
+ 		    NIS_RES_STATUS (res) = NIS_NOMEMORY;
+ 		  fail:
+ 		    __nisbind_destroy (&bptr);
+-		  fail2:
+ 		    nis_free_directory (dir);
+ 		  fail3:
+ 		    free (tablepath);
+--- libc/nis/nss_nisplus/nisplus-ethers.c	30 Apr 2006 05:44:23 -0000	1.26
++++ libc/nis/nss_nisplus/nisplus-ethers.c	21 Mar 2007 20:24:59 -0000	1.27
+@@ -256,7 +257,8 @@ _nss_nisplus_gethostton_r (const char *n
+ 
+   snprintf (buf, sizeof (buf), "[name=%s],%s", name, tablename_val);
+ 
+-  nis_result *result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS, NULL, NULL);
++  nis_result *result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS | USE_DGRAM,
++				 NULL, NULL);
+ 
+   if (result == NULL)
+     {
+@@ -322,7 +324,8 @@ _nss_nisplus_getntohost_r (const struct 
+ 	    addr->ether_addr_octet[4], addr->ether_addr_octet[5],
+ 	    tablename_val);
+ 
+-  nis_result *result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS, NULL, NULL);
++  nis_result *result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS | USE_DGRAM,
++				 NULL, NULL);
+ 
+   if (result == NULL)
+     {
+--- libc/nis/nss_nisplus/nisplus-network.c	30 Apr 2006 05:44:23 -0000	1.25
++++ libc/nis/nss_nisplus/nisplus-network.c	21 Mar 2007 20:24:59 -0000	1.26
+@@ -338,7 +339,7 @@ _nss_nisplus_getnetbyname_r (const char 
+   /* Search at first in the alias list, and use the correct name
+      for the next search */
+   snprintf (buf, sizeof (buf), "[name=%s],%s", name, tablename_val);
+-  result = nis_list (buf, FOLLOW_LINKS | FOLLOW_PATH, NULL, NULL);
++  result = nis_list (buf, FOLLOW_LINKS | FOLLOW_PATH | USE_DGRAM, NULL, NULL);
+ 
+   if (result != NULL)
+     {
+@@ -366,7 +367,8 @@ _nss_nisplus_getnetbyname_r (const char 
+ 	}
+ 
+       nis_freeresult (result);
+-      result = nis_list (bufptr, FOLLOW_LINKS | FOLLOW_PATH, NULL, NULL);
++      result = nis_list (bufptr, FOLLOW_LINKS | FOLLOW_PATH | USE_DGRAM,
++			 NULL, NULL);
+     }
+ 
+   if (result == NULL)
+@@ -438,7 +440,8 @@ _nss_nisplus_getnetbyaddr_r (uint32_t ad
+     while (1)
+       {
+ 	snprintf (buf, sizeof (buf), "[addr=%s],%s", buf2, tablename_val);
+-	nis_result *result = nis_list (buf, EXPAND_NAME, NULL, NULL);
++	nis_result *result = nis_list (buf, EXPAND_NAME | USE_DGRAM,
++				       NULL, NULL);
+ 
+ 	if (result == NULL)
+ 	  {
+--- libc/nis/nss_nisplus/nisplus-pwd.c	20 May 2006 19:20:19 -0000	1.23
++++ libc/nis/nss_nisplus/nisplus-pwd.c	21 Mar 2007 20:24:59 -0000	1.24
+@@ -311,7 +311,7 @@ _nss_nisplus_getpwnam_r (const char *nam
+ 
+   snprintf (buf, sizeof (buf), "[name=%s],%s", name, pwd_tablename_val);
+ 
+-  result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS, NULL, NULL);
++  result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS | USE_DGRAM, NULL, NULL);
+ 
+   if (result == NULL)
+     {
+@@ -370,7 +370,7 @@ _nss_nisplus_getpwuid_r (const uid_t uid
+   snprintf (buf, sizeof (buf), "[uid=%lu],%s",
+ 	    (unsigned long int) uid, pwd_tablename_val);
+ 
+-  result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS, NULL, NULL);
++  result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS | USE_DGRAM, NULL, NULL);
+ 
+   if (result == NULL)
+     {
+--- libc/nis/nss_nisplus/nisplus-rpc.c	30 Apr 2006 05:44:23 -0000	1.23
++++ libc/nis/nss_nisplus/nisplus-rpc.c	21 Mar 2007 20:24:59 -0000	1.24
+@@ -315,7 +315,8 @@ _nss_nisplus_getrpcbyname_r (const char 
+   /* Search at first in the alias list, and use the correct name
+      for the next search */
+   snprintf (buf, sizeof (buf), "[name=%s],%s", name, tablename_val);
+-  nis_result *result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS, NULL, NULL);
++  nis_result *result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS | USE_DGRAM,
++				 NULL, NULL);
+ 
+   if (result != NULL)
+     {
+@@ -342,7 +343,8 @@ _nss_nisplus_getrpcbyname_r (const char 
+ 	}
+ 
+       nis_freeresult (result);
+-      result = nis_list (bufptr, FOLLOW_PATH | FOLLOW_LINKS , NULL, NULL);
++      result = nis_list (bufptr, FOLLOW_PATH | FOLLOW_LINKS | USE_DGRAM,
++			 NULL, NULL);
+     }
+ 
+   if (result == NULL)
+@@ -402,7 +404,8 @@ _nss_nisplus_getrpcbynumber_r (const int
+ 
+   snprintf (buf, sizeof (buf), "[number=%d],%s", number, tablename_val);
+ 
+-  nis_result *result = nis_list (buf, FOLLOW_LINKS | FOLLOW_PATH, NULL, NULL);
++  nis_result *result = nis_list (buf, FOLLOW_LINKS | FOLLOW_PATH | USE_DGRAM,
++				 NULL, NULL);
+ 
+   if (result == NULL)
+     {
+--- libc/nis/nss_nisplus/nisplus-service.c	30 Apr 2006 05:44:23 -0000	1.25
++++ libc/nis/nss_nisplus/nisplus-service.c	21 Mar 2007 20:24:59 -0000	1.26
+@@ -322,7 +322,8 @@ _nss_nisplus_getservbyname_r (const char
+      for the next search */
+   snprintf (buf, sizeof (buf), "[name=%s,proto=%s],%s", name, protocol,
+ 	    tablename_val);
+-  nis_result *result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS, NULL, NULL);
++  nis_result *result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS | USE_DGRAM,
++				 NULL, NULL);
+ 
+   if (result != NULL)
+     {
+@@ -351,7 +352,8 @@ _nss_nisplus_getservbyname_r (const char
+ 	}
+ 
+       nis_freeresult (result);
+-      result = nis_list (bufptr, FOLLOW_PATH | FOLLOW_LINKS, NULL, NULL);
++      result = nis_list (bufptr, FOLLOW_PATH | FOLLOW_LINKS | USE_DGRAM,
++			 NULL, NULL);
+     }
+ 
+   if (result == NULL)
+@@ -420,7 +422,8 @@ _nss_nisplus_getservbyport_r (const int 
+   snprintf (buf, sizeof (buf), "[port=%d,proto=%s],%s",
+ 	    number, protocol, tablename_val);
+ 
+-  nis_result *result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS, NULL, NULL);
++  nis_result *result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS | USE_DGRAM,
++				 NULL, NULL);
+ 
+   if (result == NULL)
+     {
+--- libc/nis/nss_nisplus/nisplus-spwd.c	30 Apr 2006 05:44:23 -0000	1.20
++++ libc/nis/nss_nisplus/nisplus-spwd.c	21 Mar 2007 20:24:59 -0000	1.21
+@@ -182,7 +183,7 @@ _nss_nisplus_getspnam_r (const char *nam
+ 
+   snprintf (buf, sizeof (buf), "[name=%s],%s", name, pwd_tablename_val);
+ 
+-  result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS, NULL, NULL);
++  result = nis_list (buf, FOLLOW_PATH | FOLLOW_LINKS | USE_DGRAM, NULL, NULL);
+ 
+   if (result == NULL)
+     {
+--- libc/nis/rpcsvc/nislib.h	7 Aug 2006 16:01:48 -0000	1.15
++++ libc/nis/rpcsvc/nislib.h	21 Mar 2007 20:24:59 -0000	1.16
+@@ -272,12 +272,13 @@ struct dir_binding
+ typedef struct dir_binding dir_binding;
+ 
+ extern nis_error __nisbind_create (dir_binding *, const nis_server *,
+-				   unsigned int, unsigned int) __THROW;
++				   unsigned int, unsigned int, unsigned int,
++				   unsigned int) __THROW;
+ extern nis_error __nisbind_connect (dir_binding *) __THROW;
+ extern nis_error __nisbind_next (dir_binding *) __THROW;
+ extern void __nisbind_destroy (dir_binding *) __THROW;
+-extern nis_error __nisfind_server (const_nis_name, int, directory_obj **)
+-     __THROW;
++extern nis_error __nisfind_server (const_nis_name, int, directory_obj **,
++				   dir_binding *, unsigned int) __THROW;
+ 
+ #endif
+ 

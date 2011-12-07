@@ -1,0 +1,29 @@
+2007-02-21  Ulrich Drepper  <drepper@redhat.com>
+
+	* nscd/grpcache.c (cache_addgr): In case a record changed on
+	refresh, adjust key_copy.
+
+	[BZ #4074]
+	* nscd/pwdcache.c (cache_addpw): In case a record changed on
+	refresh, adjust key_copy.
+
+--- libc/nscd/grpcache.c	14 Jan 2007 05:09:52 -0000	1.47
++++ libc/nscd/grpcache.c	21 Feb 2007 09:07:54 -0000	1.48
+@@ -279,6 +279,7 @@ cache_addgr (struct database_dyn *db, in
+ 		  /* Adjust pointers into the memory block.  */
+ 		  gr_name = (char *) newp + (gr_name - (char *) dataset);
+ 		  cp = (char *) newp + (cp - (char *) dataset);
++		  key_copy = (char *) newp + (key_copy - (char *) dataset);
+ 
+ 		  dataset = memcpy (newp, dataset, total + n);
+ 		  alloca_used = false;
+--- libc/nscd/pwdcache.c	14 Jan 2007 05:09:52 -0000	1.45
++++ libc/nscd/pwdcache.c	21 Feb 2007 09:05:19 -0000	1.46
+@@ -274,6 +274,7 @@ cache_addpw (struct database_dyn *db, in
+ 		{
+ 		  /* Adjust pointer into the memory block.  */
+ 		  cp = (char *) newp + (cp - (char *) dataset);
++		  key_copy = (char *) newp + (key_copy - (char *) dataset);
+ 
+ 		  dataset = memcpy (newp, dataset, total + n);
+ 		  alloca_used = false;

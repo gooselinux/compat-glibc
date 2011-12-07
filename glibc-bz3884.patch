@@ -1,0 +1,35 @@
+2007-01-12  Gwenole Beauchesne  <gbeauchesne@mandriva.com>
+
+	[BZ #3884]
+	* locales/sl_SI: Slovenia joined the Euro zone.
+	Fix negative number format.
+
+--- libc/localedata/locales/sl_SI	30 Jul 2006 22:19:43 -0000	1.15
++++ libc/localedata/locales/sl_SI	17 Feb 2007 06:51:51 -0000	1.16
+@@ -2126,8 +2126,8 @@ noexpr  "<U005E><U005B><U004E><U006E><U0
+ END LC_MESSAGES
+ 
+ LC_MONETARY
+-int_curr_symbol           "<U0053><U0049><U0054><U0020>"
+-currency_symbol           "<U0053><U0049><U0054>"
++int_curr_symbol           "<U0045><U0055><U0052><U0020>"
++currency_symbol           "<U20AC>"
+ mon_decimal_point         "<U002C>"
+ mon_thousands_sep         "<U0020>"
+ mon_grouping              3;3
+@@ -2136,11 +2136,11 @@ negative_sign             "<U002D>"
+ int_frac_digits           2
+ frac_digits               2
+ p_cs_precedes             0
+-p_sep_by_space            2
++p_sep_by_space            1
+ n_cs_precedes             0
+-n_sep_by_space            2
+-p_sign_posn               2
+-n_sign_posn               2
++n_sep_by_space            1
++p_sign_posn               1
++n_sign_posn               1
+ END LC_MONETARY
+ 
+ LC_NUMERIC

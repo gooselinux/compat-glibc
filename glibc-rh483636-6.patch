@@ -1,0 +1,132 @@
+2009-01-29  Ulrich Drepper  <drepper@redhat.com>
+
+	* sysdeps/i386/stackinfo.h (stackinfo_get_sp): Define.
+	(stackinfo_sub_sp): Define.
+
+2009-01-28  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #9750]
+	* nscd/mem.c (gc): Use alloca_count to get the real stack usage.
+	* include/alloca.h (alloca_account): Define.
+	* sysdeps/x86_64/stackinfo.h (stackinfo_get_sp): Define.
+	(stackinfo_sub_sp): Define.
+
+	[BZ #9741]
+	* nscd/mem.c (gc): Fix assignment of he_data in case malloc is used.
+	Reported by Jun'ichi Nomura <j-nomura@ce.jp.nec.com>.
+
+--- libc/nscd/mem.c	12 Jun 2008 04:52:27 -0000	1.19
++++ libc/nscd/mem.c	29 Jan 2009 00:17:27 -0000	1.21
+@@ -134,12 +134,11 @@ gc (struct database_dyn *db)
+     stack_used = 0;
+   size_t nmark = (db->head->first_free / BLOCK_ALIGN + BITS - 1) / BITS;
+   size_t memory_needed = nmark * sizeof (BITMAP_T);
+-  if (stack_used + memory_needed <= MAX_STACK_USE)
++  if (__builtin_expect (stack_used + memory_needed <= MAX_STACK_USE, 1))
+     {
+-      mark = (BITMAP_T *) alloca (memory_needed);
++      mark = (BITMAP_T *) alloca_account (memory_needed, stack_used);
+       mark_use_malloc = false;
+       memset (mark, '\0', memory_needed);
+-      stack_used += memory_needed;
+     }
+   else
+     {
+@@ -153,19 +152,17 @@ gc (struct database_dyn *db)
+   struct hashentry **he;
+   struct hashentry **he_data;
+   bool he_use_malloc;
+-  if (stack_used + memory_needed <= MAX_STACK_USE)
++  if (__builtin_expect (stack_used + memory_needed <= MAX_STACK_USE, 1))
+     {
+-      he = alloca (db->head->nentries * sizeof (struct hashentry *));
+-      he_data = alloca (db->head->nentries * sizeof (struct hashentry *));
++      he = alloca_account (memory_needed, stack_used);
+       he_use_malloc = false;
+-      stack_used += memory_needed;
+     }
+   else
+     {
+       he = xmalloc (memory_needed);
+-      he_data = &he[db->head->nentries * sizeof (struct hashentry *)];
+       he_use_malloc = true;
+     }
++  he_data = &he[db->head->nentries];
+ 
+   size_t cnt = 0;
+   for (size_t idx = 0; idx < db->head->module; ++idx)
+@@ -373,11 +370,9 @@ gc (struct database_dyn *db)
+       ref_t disp = off_alloc - off_free;
+ 
+       struct moveinfo *new_move;
+-      if (stack_used + sizeof (*new_move) <= MAX_STACK_USE)
+-	{
+-	  new_move = alloca (sizeof (*new_move));
+-	  stack_used += sizeof (*new_move);
+-	}
++      if (__builtin_expect (stack_used + sizeof (*new_move) <= MAX_STACK_USE,
++			    1))
++	new_move = alloca_account (sizeof (*new_move), stack_used);
+       else
+ 	new_move = obstack_alloc (&ob, sizeof (*new_move));
+       new_move->from = db->data + off_alloc;
+--- libc/include/alloca.h	6 Jan 2006 09:55:30 -0000	1.8
++++ libc/include/alloca.h	29 Jan 2009 04:38:49 -0000	1.10
+@@ -46,4 +46,17 @@ extern int __libc_alloca_cutoff (size_t 
+   __alloca (((len) = (newlen)))
+ #endif
+ 
++#if defined stackinfo_get_sp && defined stackinfo_sub_sp
++# define alloca_account(size, avar) \
++  ({ void *old__ = stackinfo_get_sp ();			\
++     void *m__ = __alloca (size);			\
++     avar += stackinfo_sub_sp (old__);			\
++     m__; })
++#else
++# define alloca_account(size, avar) \
++  ({ size_t s__ = (size);		    \
++     avar += s__;			    \
++     __alloca (s__); })
++#endif
++
+ #endif
+--- libc/sysdeps/i386/stackinfo.h	6 Jul 2001 04:55:52 -0000	1.2
++++ libc/sysdeps/i386/stackinfo.h	29 Jan 2009 15:36:13 -0000	1.3
+@@ -1,4 +1,4 @@
+-/* Copyright (C) 1999 Free Software Foundation, Inc.
++/* Copyright (C) 1999, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+ 
+    The GNU C Library is free software; you can redistribute it and/or
+@@ -25,4 +25,14 @@
+ /* On x86 the stack grows down.  */
+ #define _STACK_GROWS_DOWN	1
+ 
++/* Access to the stack pointer.  The macros are used in alloca_account
++   for which they need to act as barriers as well, hence the additional
++   (unnecessary) parameters.  */
++#define stackinfo_get_sp() \
++  ({ void *p__; asm volatile ("mov %%esp, %0" : "=r" (p__)); p__; })
++#define stackinfo_sub_sp(ptr) \
++  ({ ptrdiff_t d__;                                             \
++     asm volatile ("sub %%esp, %0" : "=r" (d__) : "0" (ptr));   \
++     d__; })
++
+ #endif	/* stackinfo.h */
+--- libc/sysdeps/x86_64/stackinfo.h	19 Sep 2001 10:12:08 -0000	1.1
++++ libc/sysdeps/x86_64/stackinfo.h	29 Jan 2009 00:16:59 -0000	1.2
+@@ -25,4 +25,14 @@
+ /* On x86_64 the stack grows down.  */
+ #define _STACK_GROWS_DOWN	1
+ 
++/* Access to the stack pointer.  The macros are used in alloca_account
++   for which they need to act as barriers as well, hence the additional
++   (unnecessary) parameters.  */
++#define stackinfo_get_sp() \
++  ({ void *p__; asm volatile ("mov %%rsp, %0" : "=r" (p__)); p__; })
++#define stackinfo_sub_sp(ptr) \
++  ({ ptrdiff_t d__;						\
++     asm volatile ("sub %%rsp, %0" : "=r" (d__) : "0" (ptr));	\
++     d__; })
++
+ #endif	/* stackinfo.h */

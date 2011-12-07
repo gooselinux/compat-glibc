@@ -1,0 +1,76 @@
+2007-03-23  Jakub Jelinek  <jakub@redhat.com>
+
+	* scripts/check-local-headers.sh: Filter out sys/capability.h.
+
+2007-03-22  Jakub Jelinek  <jakub@redhat.com>
+
+	* config.h.in (HAVE_LIBCAP): Add.
+	* nscd/selinux.h: Include sys/capability.h rather than non-existent
+	sys/capabilities.h.
+	* nscd/selinux.c (preserve_capabilities): Use cap_free instead of
+	free_caps.  Cast away const from 4th cap_set_flag argument.
+
+--- libc/config.h.in	28 Oct 2006 06:44:04 -0000	1.80
++++ libc/config.h.in	26 Mar 2007 20:40:08 -0000	1.81
+@@ -19,6 +19,9 @@
+ /* Defined if building with SELinux support & audit libs are detected. */
+ #undef	HAVE_LIBAUDIT
+ 
++/* Defined if building with SELinux support & libcap libs are detected.  */
++#undef  HAVE_LIBCAP
++
+ /* Define if using XCOFF. Set by --with-xcoff.  */
+ #undef	HAVE_XCOFF
+ 
+--- libc/nscd/selinux.c	14 Jan 2007 05:25:03 -0000	1.10
++++ libc/nscd/selinux.c	26 Mar 2007 20:40:37 -0000	1.11
+@@ -187,18 +187,22 @@ preserve_capabilities (void)
+   if (tmp_caps == NULL || new_caps == NULL)
+     {
+       if (tmp_caps != NULL)
+-	free_caps (tmp_caps);
++	cap_free (tmp_caps);
+ 
+       dbg_log (_("Failed to initialize drop of capabilities"));
+       error (EXIT_FAILURE, 0, _("cap_init failed"));
+     }
+ 
+   /* There is no reason why these should not work.  */
+-  cap_set_flag (new_caps, CAP_PERMITTED, nnew_cap_list, new_cap_list, CAP_SET);
+-  cap_set_flag (new_caps, CAP_EFFECTIVE, nnew_cap_list, new_cap_list, CAP_SET);
+-
+-  cap_set_flag (tmp_caps, CAP_PERMITTED, ntmp_cap_list, tmp_cap_list, CAP_SET);
+-  cap_set_flag (tmp_caps, CAP_EFFECTIVE, ntmp_cap_list, tmp_cap_list, CAP_SET);
++  cap_set_flag (new_caps, CAP_PERMITTED, nnew_cap_list,
++		(cap_value_t *) new_cap_list, CAP_SET);
++  cap_set_flag (new_caps, CAP_EFFECTIVE, nnew_cap_list,
++		(cap_value_t *) new_cap_list, CAP_SET);
++
++  cap_set_flag (tmp_caps, CAP_PERMITTED, ntmp_cap_list,
++		(cap_value_t *) tmp_cap_list, CAP_SET);
++  cap_set_flag (tmp_caps, CAP_EFFECTIVE, ntmp_cap_list,
++		(cap_value_t *) tmp_cap_list, CAP_SET);
+ 
+   int res = cap_set_proc (tmp_caps);
+ 
+--- libc/nscd/selinux.h	26 Apr 2006 16:27:39 -0000	1.3
++++ libc/nscd/selinux.h	26 Mar 2007 20:40:21 -0000	1.4
+@@ -23,7 +23,7 @@
+ 
+ #include "nscd.h"
+ #ifdef HAVE_LIBCAP
+-# include <sys/capabilities.h>
++# include <sys/capability.h>
+ #endif
+ 
+ #ifdef HAVE_SELINUX
+--- libc/scripts/check-local-headers.sh	12 Jan 2007 16:13:55 -0000	1.4
++++ libc/scripts/check-local-headers.sh	26 Mar 2007 20:41:05 -0000	1.5
+@@ -30,6 +30,7 @@ if fgrep "$includedir" */*.{o,os,oS}.d |
+ fgrep -v "$includedir/asm" |
+ fgrep -v "$includedir/linux" |
+ fgrep -v "$includedir/selinux" |
++fgrep -v "$includedir/sys/capability.h" |
+ fgrep -v "$includedir/gd"; then
+   # If we found a match something is wrong.
+   exit 1

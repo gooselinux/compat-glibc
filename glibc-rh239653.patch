@@ -1,0 +1,476 @@
+2007-05-16  Roland McGrath  <roland@redhat.com>
+
+	* init.c (__nptl_initial_report_events): New variable.
+	(__pthread_initialize_minimal_internal): Initialize pd->report_events
+	to that.
+
+	* td_thr_get_info.c: Fake the results for TH->th_unique == 0.
+	* td_thr_validate.c: Likewise.
+	* td_thr_setgregs.c: Likewise.
+	* td_thr_setfpregs.c: Likewise.
+	* td_thr_getgregs.c: Likewise.
+	* td_thr_getfpregs.c: Likewise.
+	* td_thr_tlsbase.c: Likewise.
+
+	* structs.def: Add DB_VARIABLE (__nptl_initial_report_events).
+	* db_info.c: Add necessary declaration.
+	* td_thr_event_enable.c: Set __nptl_initial_report_events too.
+
+	* td_ta_thr_iter.c (iterate_thread_list): Make FAKE_EMPTY bool.
+	Use th_unique=0 in fake descriptor before initialization.
+
+	* td_ta_map_lwp2thr.c (__td_ta_lookup_th_unique): New function, broken
+	out of ...
+	(td_ta_map_lwp2thr): ... here, call it.  But don't before __stack_user
+	is initialized, then fake a handle with th_unique=0.
+	* thread_dbP.h: Declare it.
+
+--- libc/nptl/init.c	8 Jun 2007 02:47:50 -0000	1.70
++++ libc/nptl/init.c	26 Jun 2007 06:47:07 -0000	1.71
+@@ -234,6 +234,9 @@ sighandler_setxid (int sig, siginfo_t *s
+ extern void **__libc_dl_error_tsd (void) __attribute__ ((const));
+ 
+ 
++/* This can be set by the debugger before initialization is complete.  */
++static bool __nptl_initial_report_events;
++
+ void
+ __pthread_initialize_minimal_internal (void)
+ {
+@@ -297,6 +300,9 @@ __pthread_initialize_minimal_internal (v
+   INIT_LIST_HEAD (&__stack_user);
+   list_add (&pd->list, &__stack_user);
+ 
++  /* Before initializing __stack_user, the debugger could not find us and
++     had to set __nptl_initial_report_events.  Propagate its setting.  */
++  THREAD_SETMEM (pd, report_events, __nptl_initial_report_events);
+ 
+   /* Install the cancellation signal handler.  If for some reason we
+      cannot install the handler we do not abort.  Maybe we should, but
+
+--- libc/nptl_db/db_info.c	31 Oct 2006 17:33:49 -0000	1.6
++++ libc/nptl_db/db_info.c	26 Jun 2007 06:47:29 -0000	1.7
+@@ -38,6 +38,8 @@ typedef struct
+ 
+ typedef struct link_map link_map;
+ 
++/* Actually static in nptl/init.c, but we only need it for typeof.  */
++extern bool __nptl_initial_report_events;
+ 
+ #define schedparam_sched_priority schedparam.sched_priority
+ 
+--- libc/nptl_db/structs.def	27 Oct 2006 23:11:44 -0000	1.4
++++ libc/nptl_db/structs.def	26 Jun 2007 06:47:29 -0000	1.5
+@@ -56,6 +56,7 @@ DB_FUNCTION (__nptl_death_event)
+ DB_SYMBOL (__nptl_threads_events)
+ DB_VARIABLE (__nptl_nthreads)
+ DB_VARIABLE (__nptl_last_event)
++DB_VARIABLE (__nptl_initial_report_events)
+ 
+ DB_ARRAY_VARIABLE (__pthread_keys)
+ DB_STRUCT (pthread_key_struct)
+--- libc/nptl_db/td_ta_map_lwp2thr.c	9 Sep 2004 22:50:10 -0000	1.5
++++ libc/nptl_db/td_ta_map_lwp2thr.c	26 Jun 2007 06:47:32 -0000	1.6
+@@ -24,8 +24,8 @@
+ 
+ 
+ td_err_e
+-td_ta_map_lwp2thr (const td_thragent_t *ta_arg,
+-		   lwpid_t lwpid, td_thrhandle_t *th)
++__td_ta_lookup_th_unique (const td_thragent_t *ta_arg,
++			  lwpid_t lwpid, td_thrhandle_t *th)
+ {
+   td_thragent_t *const ta = (td_thragent_t *) ta_arg;
+   ps_err_e err;
+@@ -118,9 +118,6 @@ td_ta_map_lwp2thr (const td_thragent_t *
+ 
+   switch (ta->ta_howto)
+     {
+-    case ta_howto_unknown:
+-      return TD_DBERR;
+-
+     default:
+       return TD_DBERR;
+ 
+@@ -132,6 +129,7 @@ td_ta_map_lwp2thr (const td_thragent_t *
+ 				    0, regs, &addr);
+       if (terr != TD_OK)
+ 	return terr;
++
+       /* In this descriptor the nelem word is overloaded as the bias.  */
+       addr += (int32_t) DB_DESC_NELEM (ta->ta_howto_data.reg);
+       th->th_unique = addr;
+@@ -143,22 +141,22 @@ td_ta_map_lwp2thr (const td_thragent_t *
+       if (&ps_get_thread_area == NULL)
+ 	return TD_NOCAPAB;
+ 
+-       /* A la x86-64, there is a constant magic index for get_thread_area.  */
+-       if (ps_get_thread_area (ta->ph, lwpid,
+-			       ta->ta_howto_data.const_thread_area,
+-			       &th->th_unique) != PS_OK)
+-	 return TD_ERR;	/* XXX Other error value?  */
+-       break;
++      /* A la x86-64, there is a magic index for get_thread_area.  */
++      if (ps_get_thread_area (ta->ph, lwpid,
++			      ta->ta_howto_data.const_thread_area,
++			      &th->th_unique) != PS_OK)
++	return TD_ERR;	/* XXX Other error value?  */
++      break;
+ 
+-     case ta_howto_reg_thread_area:
++    case ta_howto_reg_thread_area:
+       if (&ps_get_thread_area == NULL)
+ 	return TD_NOCAPAB;
+ 
+-       /* A la i386, there is a register with an index for get_thread_area.  */
+-       if (ps_lgetregs (ta->ph, lwpid, regs) != PS_OK)
+-	 return TD_ERR;
+-       terr = _td_fetch_value_local (ta, ta->ta_howto_data.reg_thread_area, -1,
+-				     0, regs, &addr);
++      /* A la i386, a register holds the index for get_thread_area.  */
++      if (ps_lgetregs (ta->ph, lwpid, regs) != PS_OK)
++	return TD_ERR;
++      terr = _td_fetch_value_local (ta, ta->ta_howto_data.reg_thread_area,
++				    -1, 0, regs, &addr);
+       if (terr != TD_OK)
+ 	return terr;
+       /* In this descriptor the nelem word is overloaded as scale factor.  */
+@@ -172,7 +170,40 @@ td_ta_map_lwp2thr (const td_thragent_t *
+     }
+ 
+   /* Found it.  Now complete the `td_thrhandle_t' object.  */
+-  th->th_ta_p = (td_thragent_t *) ta;
++  th->th_ta_p = ta;
+ 
+   return TD_OK;
+ }
++
++td_err_e
++td_ta_map_lwp2thr (const td_thragent_t *ta_arg,
++		   lwpid_t lwpid, td_thrhandle_t *th)
++{
++  td_thragent_t *const ta = (td_thragent_t *) ta_arg;
++
++  /* We cannot rely on thread registers and such information at all
++     before __pthread_initialize_minimal has gotten far enough.  They
++     sometimes contain garbage that would confuse us, left by the kernel
++     at exec.  So if it looks like initialization is incomplete, we only
++     fake a special descriptor for the initial thread.  */
++
++  psaddr_t list;
++  td_err_e err = DB_GET_SYMBOL (list, ta, __stack_user);
++  if (err != TD_OK)
++    return err;
++
++  err = DB_GET_FIELD (list, ta, list, list_t, next, 0);
++  if (err != TD_OK)
++    return err;
++
++  if (list == 0)
++    {
++      if (ps_getpid (ta->ph) != lwpid)
++	return TD_ERR;
++      th->th_ta_p = ta;
++      th->th_unique = 0;
++      return TD_OK;
++    }
++
++  return __td_ta_lookup_th_unique (ta_arg, lwpid, th);
++}
+--- libc/nptl_db/td_ta_thr_iter.c	4 Apr 2004 00:31:10 -0000	1.8
++++ libc/nptl_db/td_ta_thr_iter.c	26 Jun 2007 06:47:27 -0000	1.9
+@@ -24,7 +25,7 @@
+ static td_err_e
+ iterate_thread_list (td_thragent_t *ta, td_thr_iter_f *callback,
+ 		     void *cbdata_p, td_thr_state_e state, int ti_pri,
+-		     psaddr_t head, int fake_empty)
++		     psaddr_t head, bool fake_empty)
+ {
+   td_err_e err;
+   psaddr_t next, ofs;
+@@ -41,13 +42,13 @@ iterate_thread_list (td_thragent_t *ta, 
+ 
+   if (next == 0 && fake_empty)
+     {
+-      /* __pthread_initialize_minimal has not run.
+-	 There is just the main thread to return.  */
+-      td_thrhandle_t th;
+-      err = td_ta_map_lwp2thr (ta, ps_getpid (ta->ph), &th);
+-      if (err == TD_OK)
+-	err = callback (&th, cbdata_p) != 0 ? TD_DBERR : TD_OK;
+-      return err;
++      /* __pthread_initialize_minimal has not run.  There is just the main
++	 thread to return.  We cannot rely on its thread register.  They
++	 sometimes contain garbage that would confuse us, left by the
++	 kernel at exec.  So if it looks like initialization is incomplete,
++	 we only fake a special descriptor for the initial thread.  */
++      td_thrhandle_t th = { ta, 0 };
++      return callback (&th, cbdata_p) != 0 ? TD_DBERR : TD_OK;
+     }
+ 
+   /* Cache the offset from struct pthread to its list_t member.  */
+@@ -136,13 +137,15 @@ td_ta_thr_iter (const td_thragent_t *ta_
+ 
+   err = DB_GET_SYMBOL (list, ta, __stack_user);
+   if (err == TD_OK)
+-    err = iterate_thread_list (ta, callback, cbdata_p, state, ti_pri, list, 1);
++    err = iterate_thread_list (ta, callback, cbdata_p, state, ti_pri,
++			       list, true);
+ 
+   /* And the threads with stacks allocated by the implementation.  */
+   if (err == TD_OK)
+     err = DB_GET_SYMBOL (list, ta, stack_used);
+   if (err == TD_OK)
+-    err = iterate_thread_list (ta, callback, cbdata_p, state, ti_pri, list, 0);
++    err = iterate_thread_list (ta, callback, cbdata_p, state, ti_pri,
++			       list, false);
+ 
+   return err;
+ }
+--- libc/nptl_db/td_thr_event_enable.c	9 Sep 2003 06:57:51 -0000	1.3
++++ libc/nptl_db/td_thr_event_enable.c	26 Jun 2007 06:47:29 -0000	1.4
+@@ -28,7 +28,25 @@ td_thr_event_enable (th, onoff)
+ {
+   LOG ("td_thr_event_enable");
+ 
+-  /* Write the new value into the thread data structure.  */
+-  return DB_PUT_FIELD (th->th_ta_p, th->th_unique, pthread, report_events, 0,
++  if (th->th_unique != 0)
++    {
++      /* Write the new value into the thread data structure.  */
++      td_err_e err = DB_PUT_FIELD (th->th_ta_p, th->th_unique, pthread,
++				   report_events, 0,
++				   (psaddr_t) 0 + (onoff != 0));
++      if (err != TD_OK)
++	return err;
++
++      /* Just in case we are in the window between initializing __stack_user
++	 and copying from __nptl_initial_report_events, we set it too.
++	 It doesn't hurt to do this for non-initial threads, since it
++	 won't be consulted again anyway.  It would take another fetch
++	 to get the tid and determine this isn't the initial thread,
++	 so just do it always.  */
++    }
++
++  /* We are faking it for the initial thread before its thread
++     descriptor is set up.  */
++  return DB_PUT_VALUE (th->th_ta_p, __nptl_initial_report_events, 0,
+ 		       (psaddr_t) 0 + (onoff != 0));
+ }
+--- libc/nptl_db/td_thr_get_info.c	9 Sep 2003 06:59:59 -0000	1.6
++++ libc/nptl_db/td_thr_get_info.c	26 Jun 2007 06:47:34 -0000	1.7
+@@ -32,35 +32,49 @@ td_thr_get_info (const td_thrhandle_t *t
+ 
+   LOG ("td_thr_get_info");
+ 
+-  /* Copy the whole descriptor in once so we can access the several
+-     fields locally.  Excess copying in one go is much better than
+-     multiple ps_pdread calls.  */
+-  err = DB_GET_STRUCT (copy, th->th_ta_p, th->th_unique, pthread);
+-  if (err != TD_OK)
+-    return err;
+-
+-  err = DB_GET_FIELD_ADDRESS (tls, th->th_ta_p, th->th_unique,
+-			      pthread, specific, 0);
+-  if (err != TD_OK)
+-    return err;
+-
+-  err = DB_GET_FIELD_LOCAL (schedpolicy, th->th_ta_p, copy, pthread,
+-			    schedpolicy, 0);
+-  if (err != TD_OK)
+-    return err;
+-  err = DB_GET_FIELD_LOCAL (schedprio, th->th_ta_p, copy, pthread,
+-			    schedparam_sched_priority, 0);
+-  if (err != TD_OK)
+-    return err;
+-  err = DB_GET_FIELD_LOCAL (tid, th->th_ta_p, copy, pthread, tid, 0);
+-  if (err != TD_OK)
+-    return err;
+-  err = DB_GET_FIELD_LOCAL (cancelhandling, th->th_ta_p, copy, pthread,
+-			    cancelhandling, 0);
+-  if (err != TD_OK)
+-    return err;
+-  err = DB_GET_FIELD_LOCAL (report_events, th->th_ta_p, copy, pthread,
+-			    report_events, 0);
++  if (th->th_unique == 0)
++    {
++      /* Special case for the main thread before initialization.  */
++      copy = NULL;
++      tls = 0;
++      cancelhandling = 0;
++      schedprio = 0;
++      tid = 0;
++      err = DB_GET_VALUE (report_events, th->th_ta_p,
++			  __nptl_initial_report_events, 0);
++    }
++  else
++    {
++      /* Copy the whole descriptor in once so we can access the several
++	 fields locally.  Excess copying in one go is much better than
++	 multiple ps_pdread calls.  */
++      err = DB_GET_STRUCT (copy, th->th_ta_p, th->th_unique, pthread);
++      if (err != TD_OK)
++	return err;
++
++      err = DB_GET_FIELD_ADDRESS (tls, th->th_ta_p, th->th_unique,
++				  pthread, specific, 0);
++      if (err != TD_OK)
++	return err;
++
++      err = DB_GET_FIELD_LOCAL (schedpolicy, th->th_ta_p, copy, pthread,
++				schedpolicy, 0);
++      if (err != TD_OK)
++	return err;
++      err = DB_GET_FIELD_LOCAL (schedprio, th->th_ta_p, copy, pthread,
++				schedparam_sched_priority, 0);
++      if (err != TD_OK)
++	return err;
++      err = DB_GET_FIELD_LOCAL (tid, th->th_ta_p, copy, pthread, tid, 0);
++      if (err != TD_OK)
++	return err;
++      err = DB_GET_FIELD_LOCAL (cancelhandling, th->th_ta_p, copy, pthread,
++				cancelhandling, 0);
++      if (err != TD_OK)
++	return err;
++      err = DB_GET_FIELD_LOCAL (report_events, th->th_ta_p, copy, pthread,
++				report_events, 0);
++    }
+   if (err != TD_OK)
+     return err;
+ 
+@@ -87,9 +101,10 @@ td_thr_get_info (const td_thrhandle_t *t
+   infop->ti_lid = tid == 0 ? ps_getpid (th->th_ta_p->ph) : (uintptr_t) tid;
+   infop->ti_traceme = report_events != 0;
+ 
+-  err = DB_GET_FIELD_LOCAL (infop->ti_startfunc, th->th_ta_p, copy, pthread,
+-			    start_routine, 0);
+-  if (err == TD_OK)
++  if (copy != NULL)
++    err = DB_GET_FIELD_LOCAL (infop->ti_startfunc, th->th_ta_p, copy, pthread,
++			      start_routine, 0);
++  if (copy != NULL && err == TD_OK)
+     {
+       uint32_t idx;
+       for (idx = 0; idx < TD_EVENTSIZE; ++idx)
+--- libc/nptl_db/td_thr_getfpregs.c	9 Sep 2003 06:57:51 -0000	1.3
++++ libc/nptl_db/td_thr_getfpregs.c	26 Jun 2007 06:47:34 -0000	1.4
+@@ -29,6 +29,11 @@ td_thr_getfpregs (const td_thrhandle_t *
+ 
+   LOG ("td_thr_getfpregs");
+ 
++  if (th->th_unique == 0)
++    /* Special case for the main thread before initialization.  */
++    return ps_lgetfpregs (th->th_ta_p->ph, ps_getpid (th->th_ta_p->ph),
++			  regset) != PS_OK ? TD_ERR : TD_OK;
++
+   /* We have to get the state and the PID for this thread.  */
+   err = DB_GET_FIELD (cancelhandling, th->th_ta_p, th->th_unique, pthread,
+ 		      cancelhandling, 0);
+--- libc/nptl_db/td_thr_getgregs.c	9 Sep 2003 06:57:51 -0000	1.3
++++ libc/nptl_db/td_thr_getgregs.c	26 Jun 2007 06:47:34 -0000	1.4
+@@ -29,6 +29,11 @@ td_thr_getgregs (const td_thrhandle_t *t
+ 
+   LOG ("td_thr_getgregs");
+ 
++  if (th->th_unique == 0)
++    /* Special case for the main thread before initialization.  */
++    return ps_lgetregs (th->th_ta_p->ph, ps_getpid (th->th_ta_p->ph),
++			regset) != PS_OK ? TD_ERR : TD_OK;
++
+   /* We have to get the state and the PID for this thread.  */
+   err = DB_GET_FIELD (cancelhandling, th->th_ta_p, th->th_unique, pthread,
+ 		      cancelhandling, 0);
+--- libc/nptl_db/td_thr_setfpregs.c	9 Sep 2003 06:57:51 -0000	1.3
++++ libc/nptl_db/td_thr_setfpregs.c	26 Jun 2007 06:47:34 -0000	1.4
+@@ -29,6 +29,11 @@ td_thr_setfpregs (const td_thrhandle_t *
+ 
+   LOG ("td_thr_setfpregs");
+ 
++  if (th->th_unique == 0)
++    /* Special case for the main thread before initialization.  */
++    return ps_lsetfpregs (th->th_ta_p->ph, ps_getpid (th->th_ta_p->ph),
++			  fpregs) != PS_OK ? TD_ERR : TD_OK;
++
+   /* We have to get the state and the PID for this thread.  */
+   err = DB_GET_FIELD (cancelhandling, th->th_ta_p, th->th_unique, pthread,
+ 		      cancelhandling, 0);
+--- libc/nptl_db/td_thr_setgregs.c	9 Sep 2003 06:57:51 -0000	1.3
++++ libc/nptl_db/td_thr_setgregs.c	26 Jun 2007 06:47:34 -0000	1.4
+@@ -29,6 +29,11 @@ td_thr_setgregs (const td_thrhandle_t *t
+ 
+   LOG ("td_thr_setgregs");
+ 
++  if (th->th_unique == 0)
++    /* Special case for the main thread before initialization.  */
++    return ps_lsetregs (th->th_ta_p->ph, ps_getpid (th->th_ta_p->ph),
++			gregs) != PS_OK ? TD_ERR : TD_OK;
++
+   /* We have to get the state and the PID for this thread.  */
+   err = DB_GET_FIELD (cancelhandling, th->th_ta_p, th->th_unique, pthread,
+ 		      cancelhandling, 0);
+--- libc/nptl_db/td_thr_tlsbase.c	4 Feb 2006 00:47:58 -0000	1.3
++++ libc/nptl_db/td_thr_tlsbase.c	26 Jun 2007 06:47:34 -0000	1.4
+@@ -30,8 +30,29 @@ td_thr_tlsbase (const td_thrhandle_t *th
+   if (modid < 1)
+     return TD_NOTLS;
+ 
++  psaddr_t pd = th->th_unique;
++  if (pd == 0)
++    {
++      /* This is the fake handle for the main thread before libpthread
++	 initialization.  We are using 0 for its th_unique because we can't
++	 trust that its thread register has been initialized.  But we need
++	 a real pointer to have any TLS access work.  In case of dlopen'd
++	 libpthread, initialization might not be for quite some time.  So
++	 try looking up the thread register now.  Worst case, it's nonzero
++	 uninitialized garbage and we get bogus results for TLS access
++	 attempted too early.  Tough.  */
++
++      td_thrhandle_t main_th;
++      err = __td_ta_lookup_th_unique (th->th_ta_p, ps_getpid (th->th_ta_p->ph),
++				      &main_th);
++      if (err == 0)
++	pd = main_th.th_unique;
++      if (pd == 0)
++	return TD_TLSDEFER;
++    }
++
+   /* Get the DTV pointer from the thread descriptor.  */
+-  err = DB_GET_FIELD (dtv, th->th_ta_p, th->th_unique, pthread, dtvp, 0);
++  err = DB_GET_FIELD (dtv, th->th_ta_p, pd, pthread, dtvp, 0);
+   if (err != TD_OK)
+     return err;
+ 
+--- libc/nptl_db/td_thr_validate.c	1 Jun 2004 21:42:02 -0000	1.4
++++ libc/nptl_db/td_thr_validate.c	26 Jun 2007 06:47:34 -0000	1.5
+@@ -75,16 +75,10 @@ td_thr_validate (const td_thrhandle_t *t
+       if (err == TD_OK)
+ 	err = check_thread_list (th, list, &uninit);
+ 
+-      if (err == TD_NOTHR && uninit)
+-	{
+-	  /* __pthread_initialize_minimal has not run yet.
+-	     But the main thread still has a valid ID.  */
+-	  td_thrhandle_t main_th;
+-	  err = td_ta_map_lwp2thr (th->th_ta_p,
+-				   ps_getpid (th->th_ta_p->ph), &main_th);
+-	  if (err == TD_OK && th->th_unique != main_th.th_unique)
+-	    err = TD_NOTHR;
+-	}
++      if (err == TD_NOTHR && uninit && th->th_unique == 0)
++	/* __pthread_initialize_minimal has not run yet.
++	   There is only the special case thread handle.  */
++	err = TD_OK;
+     }
+ 
+   return err;
+--- libc/nptl_db/thread_dbP.h	3 May 2004 21:30:30 -0000	1.5
++++ libc/nptl_db/thread_dbP.h	26 Jun 2007 06:47:32 -0000	1.6
+@@ -251,4 +251,7 @@ extern td_err_e _td_store_value_local (t
+ extern td_err_e _td_check_sizeof (td_thragent_t *ta, uint32_t *sizep,
+ 				  int sizep_name) attribute_hidden;
+ 
++extern td_err_e __td_ta_lookup_th_unique (const td_thragent_t *ta,
++					  lwpid_t lwpid, td_thrhandle_t *th);
++
+ #endif /* thread_dbP.h */

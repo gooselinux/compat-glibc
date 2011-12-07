@@ -1,0 +1,16 @@
+2007-12-11  Ulrich Drepper  <drepper@redhat.com>
+
+	* malloc/malloc.c (_int_malloc): sYSMALLOc might fail, in this
+	case don't call alloc_perturb.
+
+--- libc/malloc/malloc.c	2 Oct 2007 03:52:03 -0000	1.181
++++ libc/malloc/malloc.c	11 Dec 2007 23:46:31 -0000	1.182
+@@ -4515,7 +4515,7 @@ _int_malloc(mstate av, size_t bytes)
+     */
+     else {
+       void *p = sYSMALLOc(nb, av);
+-      if (__builtin_expect (perturb_byte, 0))
++      if (p != NULL && __builtin_expect (perturb_byte, 0))
+ 	alloc_perturb (p, bytes);
+       return p;
+     }

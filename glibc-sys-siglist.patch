@@ -1,0 +1,151 @@
+2006-11-10  Jakub Jelinek  <jakub@redhat.com>
+
+	* sysdeps/gnu/siglist.c (__old_sys_siglist, __old_sys_sigabbrev):
+	Use __new_sys_siglist instead of _sys_siglist_internal as
+	second macro argument.
+	(_old_sys_siglist): Use declare_symbol_alias macro instead of
+	strong_alias.
+
+2006-11-07  Jakub Jelinek  <jakub@redhat.com>
+
+	* include/libc-symbols.h (declare_symbol): Rename to...
+	(declare_symbol_alias): ... this.  Add ORIGINAL argument, imply
+	strong_alias (ORIGINAL, SYMBOL) in asm to make sure it preceedes
+	.size directive.
+	* sysdeps/gnu/errlist-compat.awk: Adjust for declare_symbol_alias
+	changes.
+	* sysdeps/gnu/siglist.c: Likewise.
+
+Index: glibc-2.5-20061008T1257/include/libc-symbols.h
+===================================================================
+--- glibc-2.5-20061008T1257.orig/include/libc-symbols.h
++++ glibc-2.5-20061008T1257/include/libc-symbols.h
+@@ -286,27 +286,42 @@ requires at runtime the shared libraries
+ for linking")
+ #endif
+ 
+-/* Declare SYMBOL to be TYPE (`function' or `object') and of SIZE bytes,
+-   when the assembler supports such declarations (such as in ELF).
++/* Declare SYMBOL to be TYPE (`function' or `object') of SIZE bytes
++   alias to ORIGINAL, when the assembler supports such declarations
++   (such as in ELF).
+    This is only necessary when defining something in assembly, or playing
+    funny alias games where the size should be other than what the compiler
+    thinks it is.  */
+-#define declare_symbol(symbol, type, size) \
+-  declare_symbol_1 (symbol, type, size)
++#define declare_symbol_alias(symbol, original, type, size) \
++  declare_symbol_alias_1 (symbol, original, type, size)
+ #ifdef ASM_TYPE_DIRECTIVE_PREFIX
+ # ifdef __ASSEMBLER__
+-#  define declare_symbol_1(symbol, type, size) \
++#  define declare_symbol_alias_1(symbol, original, type, size) \
++    strong_alias (original, symbol); \
+     .type C_SYMBOL_NAME (symbol), \
+-	  declare_symbol_1_paste (ASM_TYPE_DIRECTIVE_PREFIX, type), size
+-#  define declare_symbol_1_paste(a, b)	declare_symbol_1_paste_1 (a,b)
+-#  define declare_symbol_1_paste_1(a,b)	a##b
++	  declare_symbol_alias_1_paste (ASM_TYPE_DIRECTIVE_PREFIX, type); \
++    .size C_SYMBOL_NAME (symbol), size
++#  define declare_symbol_alias_1_paste(a, b) \
++  declare_symbol_alias_1_paste_1 (a,b)
++#  define declare_symbol_alias_1_paste_1(a,b)	a##b
+ # else /* Not __ASSEMBLER__.  */
+-#  define declare_symbol_1(symbol, type, size) \
+-    asm (".type " __SYMBOL_PREFIX #symbol ", " \
+-	 declare_symbol_1_stringify (ASM_TYPE_DIRECTIVE_PREFIX) #type \
++#  define declare_symbol_alias_1(symbol, original, type, size) \
++    asm (declare_symbol_alias_1_stringify (ASM_GLOBAL_DIRECTIVE) \
++	 " " __SYMBOL_PREFIX #symbol \
++	 "\n\t" declare_symbol_alias_1_alias (symbol, original) \
++	 "\n\t.type " __SYMBOL_PREFIX #symbol ", " \
++	 declare_symbol_alias_1_stringify (ASM_TYPE_DIRECTIVE_PREFIX) #type \
+ 	 "\n\t.size " __SYMBOL_PREFIX #symbol ", " #size);
+-#  define declare_symbol_1_stringify(x) declare_symbol_1_stringify_1 (x)
+-#  define declare_symbol_1_stringify_1(x) #x
++#  define declare_symbol_alias_1_stringify(x) \
++  declare_symbol_alias_1_stringify_1 (x)
++#  define declare_symbol_alias_1_stringify_1(x) #x
++#  ifdef HAVE_ASM_SET_DIRECTIVE
++#   define declare_symbol_alias_1_alias(symbol, original) \
++	 ".set " __SYMBOL_PREFIX #symbol ", " __SYMBOL_PREFIX #original
++#  else
++#   define declare_symbol_alias_1_alias(symbol, original) \
++	 __SYMBOL_PREFIX #symbol " = " __SYMBOL_PREFIX #original
++#  endif /* HAVE_ASM_SET_DIRECTIVE */
+ # endif /* __ASSEMBLER__ */
+ #else
+ # define declare_symbol_1(symbol, type, size) /* Nothing.  */
+Index: glibc-2.5-20061008T1257/sysdeps/gnu/errlist-compat.awk
+===================================================================
+--- glibc-2.5-20061008T1257.orig/sysdeps/gnu/errlist-compat.awk
++++ glibc-2.5-20061008T1257/sysdeps/gnu/errlist-compat.awk
+@@ -92,16 +92,18 @@ END {
+     printf "# include <bits/wordsize.h>\n";
+     printf "extern const char *const __sys_errlist_%s[NERR];\n", old;
+     printf "const int __sys_nerr_%s = %d;\n", old, n;
+-    printf "strong_alias (_sys_errlist_internal, __sys_errlist_%s)\n", old;
+-    printf "declare_symbol (__sys_errlist_%s, object, __WORDSIZE/8*%d)\n", \
+-      old, n;
++    printf "declare_symbol_alias (__sys_errlist_%s, _sys_errlist_internal,", \
++      old;
++    printf " object, __WORDSIZE/8*%d)\n", n;
+     printf "compat_symbol (libc, __sys_errlist_%s, sys_errlist, %s);\n", \
+       old, old;
+     printf "compat_symbol (libc, __sys_nerr_%s, sys_nerr, %s);\n", old, old;
+ 
+     printf "extern const char *const ___sys_errlist_%s[NERR];\n", old;
+     printf "extern const int __sys_nerr_%s;\n", old;
+-    printf "strong_alias (__sys_errlist_%s, ___sys_errlist_%s)\n", old, old;
++    printf "declare_symbol_alias (___sys_errlist_%s, _sys_errlist_internal,", \
++      old;
++    printf " object, __WORDSIZE/8*%d)\n", n;
+     printf "strong_alias (__sys_nerr_%s, ___sys_nerr_%s)\n", old, old;
+     printf "compat_symbol (libc, ___sys_errlist_%s, _sys_errlist, %s);\n", \
+       old, old;
+Index: glibc-2.5-20061008T1257/sysdeps/gnu/siglist.c
+===================================================================
+--- glibc-2.5-20061008T1257.orig/sysdeps/gnu/siglist.c
++++ glibc-2.5-20061008T1257/sysdeps/gnu/siglist.c
+@@ -40,27 +40,30 @@ const char *const __new_sys_sigabbrev[NS
+ strong_alias (__new_sys_sigabbrev, _sys_sigabbrev_internal)
+ 
+ #if SHLIB_COMPAT (libc, GLIBC_2_0, GLIBC_2_1)
+-strong_alias (_sys_siglist_internal, __old_sys_siglist)
+-declare_symbol (__old_sys_siglist, object, OLD_SIGLIST_SIZE * __WORDSIZE / 8)
++declare_symbol_alias (__old_sys_siglist, __new_sys_siglist, object,
++		      OLD_SIGLIST_SIZE * __WORDSIZE / 8)
+ 
+-strong_alias (_sys_sigabbrev_internal, __old_sys_sigabbrev)
+-declare_symbol (__old_sys_sigabbrev, object, OLD_SIGLIST_SIZE * __WORDSIZE / 8)
++declare_symbol_alias (__old_sys_sigabbrev, __new_sys_sigabbrev, object,
++		      OLD_SIGLIST_SIZE * __WORDSIZE / 8)
++
++declare_symbol_alias (_old_sys_siglist, __new_sys_siglist, object,
++		      OLD_SIGLIST_SIZE * __WORDSIZE / 8)
+ 
+-strong_alias (__old_sys_siglist, _old_sys_siglist)
+ compat_symbol (libc, __old_sys_siglist, _sys_siglist, GLIBC_2_0);
+ compat_symbol (libc, _old_sys_siglist, sys_siglist, GLIBC_2_0);
+ compat_symbol (libc, __old_sys_sigabbrev, sys_sigabbrev, GLIBC_2_0);
+ #endif
+ 
+ #if SHLIB_COMPAT (libc, GLIBC_2_1, GLIBC_2_3_3) && defined OLD2_SIGLIST_SIZE
+-strong_alias (_sys_siglist_internal, __old2_sys_siglist)
+-declare_symbol (__old2_sys_siglist, object, OLD2_SIGLIST_SIZE * __WORDSIZE / 8)
++declare_symbol_alias (__old2_sys_siglist, __new_sys_siglist, object,
++		      OLD2_SIGLIST_SIZE * __WORDSIZE / 8)
++
++declare_symbol_alias (__old2_sys_sigabbrev, __new_sys_sigabbrev, object,
++		      OLD2_SIGLIST_SIZE * __WORDSIZE / 8)
+ 
+-strong_alias (_sys_sigabbrev_internal, __old2_sys_sigabbrev)
+-declare_symbol (__old2_sys_sigabbrev, object,
+-		OLD2_SIGLIST_SIZE * __WORDSIZE / 8)
++declare_symbol_alias (_old2_sys_siglist, __new_sys_siglist, object,
++		      OLD2_SIGLIST_SIZE * __WORDSIZE / 8)
+ 
+-strong_alias (__old2_sys_siglist, _old2_sys_siglist)
+ compat_symbol (libc, __old2_sys_siglist, _sys_siglist, GLIBC_2_1);
+ compat_symbol (libc, _old2_sys_siglist, sys_siglist, GLIBC_2_1);
+ compat_symbol (libc, __old2_sys_sigabbrev, sys_sigabbrev, GLIBC_2_1);

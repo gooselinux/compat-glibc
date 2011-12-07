@@ -1,0 +1,362 @@
+2008-04-22  Jakub Jelinek  <jakub@redhat.com>
+
+	* nscd/Makefile (nscd-cflags): Set back to -fpie.
+	* nscd/nscd.h (mem_in_flight): Add attribute_tls_model_ie.
+	* nscd/connections.c (mem_in_flight): Likewise.
+
+	* nscd/nscd.h (dbs): Make hidden.
+
+2008-04-15  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #5381]
+	* nscd/nscd.h: Define enum in_flight, mem_in_flight, and
+	mem_in_flight_list variables.  Add new parameter to mempool_alloc
+	prototype.
+	* nscd/mem.c (mempool_alloc): Take additional parameter.  Initialize
+	appropriate mem_in_flight element.
+	(gc): Take allocations which have not yet been committed to the
+	database into account.
+	* nscd/cache.c (cache_add): Add new parameter to mempool_alloc call.
+	Reset mem_in_flight before returning.
+	* nscd/connections.c (nscd_run_worker): Initialize mem_in_flight and
+	cue it up in mem_in_flight_list.
+	* nscd/aicache.c: Adjust mempool_alloc call.
+	* nscd/grpcache.c: Likewise.
+	* nscd/hstcache.c: Likewise.
+	* nscd/initgrcache.c: Likewise.
+	* nscd/pwdcache.c: Likewise.
+	* nscd/servicescache.c: Likewise.
+	* nscd/Makefile (nscd-flags): Until ld is fixed, use -fpic instead
+	of -fpie.
+
+--- libc/nscd/aicache.c	25 Nov 2007 12:56:35 -0000	1.17
++++ libc/nscd/aicache.c	19 Apr 2008 16:42:32 -0000	1.18
+@@ -268,7 +268,8 @@ addhstaiX (struct database_dyn *db, int 
+ 		{
+ 		  dataset = (struct dataset *) mempool_alloc (db,
+ 							      total
+-							      + req->key_len);
++							      + req->key_len,
++							      IDX_result_data);
+ 		  if (dataset == NULL)
+ 		    ++db->head->addfailed;
+ 		}
+@@ -344,7 +345,8 @@ addhstaiX (struct database_dyn *db, int 
+ 		      struct dataset *newp
+ 			= (struct dataset *) mempool_alloc (db,
+ 							    total
+-							    + req->key_len);
++							    + req->key_len,
++							    IDX_result_data);
+ 		      if (newp != NULL)
+ 			{
+ 			  /* Adjust pointer into the memory block.  */
+@@ -428,7 +430,8 @@ addhstaiX (struct database_dyn *db, int 
+       if (fd != -1)
+ 	TEMP_FAILURE_RETRY (send (fd, &notfound, total, MSG_NOSIGNAL));
+ 
+-      dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len);
++      dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len,
++			       IDX_result_data);
+       /* If we cannot permanently store the result, so be it.  */
+       if (dataset != NULL)
+ 	{
+--- libc/nscd/cache.c	25 Nov 2007 21:47:35 -0000	1.35
++++ libc/nscd/cache.c	19 Apr 2008 16:41:46 -0000	1.36
+@@ -135,10 +135,15 @@ cache_add (int type, const void *key, si
+   unsigned long int hash = __nis_hash (key, len) % table->head->module;
+   struct hashentry *newp;
+ 
+-  newp = mempool_alloc (table, sizeof (struct hashentry));
++  newp = mempool_alloc (table, sizeof (struct hashentry), IDX_record_data);
+   /* If we cannot allocate memory, just do not do anything.  */
+   if (newp == NULL)
+-    return -1;
++    {
++      /* Mark the in-flight memory as unused.  */
++      for (enum in_flight idx = 0; idx < IDX_record_data; ++idx)
++	mem_in_flight.block[idx].dbidx = -1;
++      return -1;
++    }
+ 
+   newp->type = type;
+   newp->first = first;
+@@ -178,6 +183,10 @@ cache_add (int type, const void *key, si
+ 	   (char *) &table->head->array[hash] - (char *) table->head
+ 	   + sizeof (ref_t), MS_ASYNC);
+ 
++  /* Mark the in-flight memory as unused.  */
++  for (enum in_flight idx = 0; idx < IDX_last; ++idx)
++    mem_in_flight.block[idx].dbidx = -1;
++
+   return 0;
+ }
+ 
+--- libc/nscd/connections.c	4 Mar 2008 01:53:50 -0000	1.109
++++ libc/nscd/connections.c	22 Apr 2008 15:53:45 -0000	1.111
+@@ -193,6 +193,11 @@ static int sock;
+ /* Number of times clients had to wait.  */
+ unsigned long int client_queued;
+ 
++/* Data structure for recording in-flight memory allocation.  */
++__thread struct mem_in_flight mem_in_flight attribute_tls_model_ie;
++/* Global list of the mem_in_flight variables of all the threads.  */
++struct mem_in_flight *mem_in_flight_list;
++
+ 
+ ssize_t
+ writeall (int fd, const void *buf, size_t len)
+@@ -1314,6 +1319,16 @@ nscd_run (void *p)
+       prune_ts.tv_sec += CACHE_PRUNE_INTERVAL;
+     }
+ 
++  /* Initialize the memory-in-flight list.  */
++  for (enum in_flight idx = 0; idx < IDX_last; ++idx)
++    mem_in_flight.block[idx].dbidx = -1;
++  /* And queue this threads structure.  */
++  do
++    mem_in_flight.next = mem_in_flight_list;
++  while (atomic_compare_and_exchange_bool_acq (&mem_in_flight_list,
++					       &mem_in_flight,
++					       mem_in_flight.next) != 0);
++
+   /* Initial locking.  */
+   pthread_mutex_lock (&readylist_lock);
+ 
+--- libc/nscd/grpcache.c	25 Nov 2007 21:25:22 -0000	1.50
++++ libc/nscd/grpcache.c	19 Apr 2008 16:42:32 -0000	1.51
+@@ -113,7 +113,8 @@ cache_addgr (struct database_dyn *db, in
+ 	  written = TEMP_FAILURE_RETRY (send (fd, &notfound, total,
+ 					      MSG_NOSIGNAL));
+ 
+-	  dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len);
++	  dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len,
++				   IDX_result_data);
+ 	  /* If we cannot permanently store the result, so be it.  */
+ 	  if (dataset != NULL)
+ 	    {
+@@ -204,7 +205,8 @@ cache_addgr (struct database_dyn *db, in
+ 
+       if (he == NULL)
+ 	{
+-	  dataset = (struct dataset *) mempool_alloc (db, total + n);
++	  dataset = (struct dataset *) mempool_alloc (db, total + n,
++						      IDX_result_data);
+ 	  if (dataset == NULL)
+ 	    ++db->head->addfailed;
+ 	}
+@@ -274,7 +276,8 @@ cache_addgr (struct database_dyn *db, in
+ 	      /* We have to create a new record.  Just allocate
+ 		 appropriate memory and copy it.  */
+ 	      struct dataset *newp
+-		= (struct dataset *) mempool_alloc (db, total + n);
++		= (struct dataset *) mempool_alloc (db, total + n,
++						    IDX_result_data);
+ 	      if (newp != NULL)
+ 		{
+ 		  /* Adjust pointers into the memory block.  */
+--- libc/nscd/hstcache.c	25 Nov 2007 21:24:14 -0000	1.46
++++ libc/nscd/hstcache.c	19 Apr 2008 16:42:32 -0000	1.47
+@@ -120,7 +120,8 @@ cache_addhst (struct database_dyn *db, i
+ 	    written = TEMP_FAILURE_RETRY (send (fd, &notfound, total,
+ 						MSG_NOSIGNAL));
+ 
+-	  dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len);
++	  dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len,
++				   IDX_result_data);
+ 	  /* If we cannot permanently store the result, so be it.  */
+ 	  if (dataset != NULL)
+ 	    {
+@@ -225,7 +226,8 @@ cache_addhst (struct database_dyn *db, i
+       if (he == NULL && hst->h_addr_list[1] == NULL)
+ 	{
+ 	  dataset = (struct dataset *) mempool_alloc (db,
+-						      total + req->key_len);
++						      total + req->key_len,
++						      IDX_result_data);
+ 	  if (dataset == NULL)
+ 	    ++db->head->addfailed;
+ 	}
+@@ -307,7 +309,8 @@ cache_addhst (struct database_dyn *db, i
+ 	      /* We have to create a new record.  Just allocate
+ 		 appropriate memory and copy it.  */
+ 	      struct dataset *newp
+-		= (struct dataset *) mempool_alloc (db, total + req->key_len);
++		= (struct dataset *) mempool_alloc (db, total + req->key_len,
++						    IDX_result_data);
+ 	      if (newp != NULL)
+ 		{
+ 		  /* Adjust pointers into the memory block.  */
+--- libc/nscd/initgrcache.c	25 Nov 2007 21:29:04 -0000	1.12
++++ libc/nscd/initgrcache.c	19 Apr 2008 16:42:32 -0000	1.13
+@@ -197,7 +197,8 @@ addinitgroupsX (struct database_dyn *db,
+ 	    written = TEMP_FAILURE_RETRY (send (fd, &notfound, total,
+ 						MSG_NOSIGNAL));
+ 
+-	  dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len);
++	  dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len,
++				   IDX_result_data);
+ 	  /* If we cannot permanently store the result, so be it.  */
+ 	  if (dataset != NULL)
+ 	    {
+@@ -259,7 +260,8 @@ addinitgroupsX (struct database_dyn *db,
+       if (he == NULL)
+ 	{
+ 	  dataset = (struct dataset *) mempool_alloc (db,
+-						      total + req->key_len);
++						      total + req->key_len,
++						      IDX_result_data);
+ 	  if (dataset == NULL)
+ 	    ++db->head->addfailed;
+ 	}
+@@ -329,7 +331,8 @@ addinitgroupsX (struct database_dyn *db,
+ 	      /* We have to create a new record.  Just allocate
+ 		 appropriate memory and copy it.  */
+ 	      struct dataset *newp
+-		= (struct dataset *) mempool_alloc (db, total + req->key_len);
++		= (struct dataset *) mempool_alloc (db, total + req->key_len,
++						    IDX_result_data);
+ 	      if (newp != NULL)
+ 		{
+ 		  /* Adjust pointer into the memory block.  */
+--- libc/nscd/mem.c	25 Nov 2007 21:07:14 -0000	1.12
++++ libc/nscd/mem.c	19 Apr 2008 16:41:32 -0000	1.13
+@@ -197,6 +197,31 @@ gc (struct database_dyn *db)
+     }
+   assert (cnt == db->head->nentries);
+ 
++  /* Go through the list of in-flight memory blocks.  */
++  struct mem_in_flight *mrunp = mem_in_flight_list;
++  while (mrunp != NULL)
++    {
++      /* NB: There can be no race between this test and another thread
++        setting the field to the index we are looking for because
++        this would require the other thread to also have the memlock
++        for the database.
++
++	NB2: we do not have to look at latter blocks (higher indices) if
++	earlier blocks are not in flight.  They are always allocated in
++	sequence.  */
++      for (enum in_flight idx = IDX_result_data;
++	   idx < IDX_last && mrunp->block[idx].dbidx == db - dbs; ++idx)
++	{
++	 assert ((char *) mrunp->block[idx].blockaddr > db->data);
++	 assert ((char *) mrunp->block[idx].blockaddr
++		 + mrunp->block[0].blocklen <= db->data + db->memsize);
++	 markrange (mark, (char *) mrunp->block[idx].blockaddr -  db->data,
++		    mrunp->block[idx].blocklen);
++	}
++
++      mrunp = mrunp->next;
++    }
++
+   /* Sort the entries by the addresses of the referenced data.  All
+      the entries pointing to the same DATAHEAD object will have the
+      same key.  Stability of the sorting is unimportant.  */
+@@ -503,7 +528,7 @@ gc (struct database_dyn *db)
+ 
+ 
+ void *
+-mempool_alloc (struct database_dyn *db, size_t len)
++mempool_alloc (struct database_dyn *db, size_t len, enum in_flight idx)
+ {
+   /* Make sure LEN is a multiple of our maximum alignment so we can
+      keep track of used memory is multiples of this alignment value.  */
+@@ -567,6 +592,12 @@ mempool_alloc (struct database_dyn *db, 
+       db->head->first_free += len;
+ 
+       db->last_alloc_failed = false;
++
++      /* Remember that we have allocated this memory.  */
++      assert (idx >= 0 && idx < IDX_last);
++      mem_in_flight.block[idx].dbidx = db - dbs;
++      mem_in_flight.block[idx].blocklen = len;
++      mem_in_flight.block[idx].blockaddr = res;
+     }
+ 
+   pthread_mutex_unlock (&db->memlock);
+--- libc/nscd/nscd.h	4 Mar 2008 01:53:25 -0000	1.33
++++ libc/nscd/nscd.h	22 Apr 2008 15:53:29 -0000	1.35
+@@ -117,7 +117,7 @@ struct database_dyn
+ 
+ 
+ /* Global variables.  */
+-extern struct database_dyn dbs[lastdb];
++extern struct database_dyn dbs[lastdb] attribute_hidden;
+ extern const char *dbnames[lastdb];
+ extern const char *serv2str[LASTREQ];
+ 
+@@ -170,6 +170,31 @@ extern uid_t old_uid;
+ extern gid_t old_gid;
+ 
+ 
++/* Memory allocation in flight.  Each thread can have a limited number
++   of allocation in flight.  No need to create dynamic data
++   structures.  We use fixed indices.  */
++enum in_flight
++  {
++    IDX_result_data = 0,
++    /* Keep the IDX_record_data entry last at all times.  */
++    IDX_record_data = 1,
++    IDX_last
++  };
++extern __thread struct mem_in_flight
++{
++  struct
++  {
++    int dbidx;
++    nscd_ssize_t blocklen;
++    void *blockaddr;
++  } block[IDX_last];
++
++  struct mem_in_flight *next;
++} mem_in_flight attribute_tls_model_ie;
++/* Global list of the mem_in_flight variables of all the threads.  */
++extern struct mem_in_flight *mem_in_flight_list;
++
++
+ /* Prototypes for global functions.  */
+ 
+ /* nscd.c */
+@@ -250,7 +275,8 @@ extern void readdinitgroups (struct data
+ 			     struct datahead *dh);
+ 
+ /* mem.c */
+-extern void *mempool_alloc (struct database_dyn *db, size_t len);
++extern void *mempool_alloc (struct database_dyn *db, size_t len,
++			    enum in_flight idx);
+ extern void gc (struct database_dyn *db);
+ 
+ 
+--- libc/nscd/pwdcache.c	25 Nov 2007 21:27:50 -0000	1.48
++++ libc/nscd/pwdcache.c	19 Apr 2008 16:42:32 -0000	1.49
+@@ -120,7 +120,8 @@ cache_addpw (struct database_dyn *db, in
+ 	    written = TEMP_FAILURE_RETRY (send (fd, &notfound, total,
+ 						MSG_NOSIGNAL));
+ 
+-	  dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len);
++	  dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len,
++				   IDX_result_data);
+ 	  /* If we cannot permanently store the result, so be it.  */
+ 	  if (dataset != NULL)
+ 	    {
+@@ -199,7 +200,8 @@ cache_addpw (struct database_dyn *db, in
+ 
+       if (he == NULL)
+ 	{
+-	  dataset = (struct dataset *) mempool_alloc (db, total + n);
++	  dataset = (struct dataset *) mempool_alloc (db, total + n,
++						      IDX_result_data);
+ 	  if (dataset == NULL)
+ 	    ++db->head->addfailed;
+ 	}
+@@ -270,7 +272,8 @@ cache_addpw (struct database_dyn *db, in
+ 	      /* We have to create a new record.  Just allocate
+ 		 appropriate memory and copy it.  */
+ 	      struct dataset *newp
+-		= (struct dataset *) mempool_alloc (db, total + n);
++		= (struct dataset *) mempool_alloc (db, total + n,
++						    IDX_result_data);
+ 	      if (newp != NULL)
+ 		{
+ 		  /* Adjust pointer into the memory block.  */

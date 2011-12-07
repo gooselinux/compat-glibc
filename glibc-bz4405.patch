@@ -1,0 +1,17 @@
+2007-04-23  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #4405]
+	* iconvdata/gconv-modules (E13B): Add a missing slash to the alias
+	name.  Patch by Aurelien Jarno <aurelien@aurel32.net>.
+
+--- libc/iconvdata/gconv-modules	20 Jan 2007 00:22:40 -0000	1.90
++++ libc/iconvdata/gconv-modules	23 Apr 2007 09:22:10 -0000	1.91
+@@ -1376,7 +1376,7 @@ module	INTERNAL		INIS-CYRILLIC//		INIS-C
+ #	from			to			module		cost
+ alias	ISO-IR-98//		ISO_2033//
+ alias	ISO_2033-1983//		ISO_2033//
+-alias	E13B/			ISO_2033//
++alias	E13B//			ISO_2033//
+ alias	CSISO2033//		ISO_2033//
+ module	ISO_2033//		INTERNAL		ISO_2033	1
+ module	INTERNAL		ISO_2033//		ISO_2033	1

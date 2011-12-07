@@ -1,0 +1,16 @@
+2008-11-02  Ulrich Drepper  <drepper@redhat.com>
+
+	* malloc/malloc.c (public_rEALLOc): When new arena is used, copy
+	really all bytes.  Patch by Denys Vlasenko <dvlasenk@redhat.com>.
+
+--- libc/malloc/malloc.c	12 Sep 2008 18:18:25 -0000	1.189
++++ libc/malloc/malloc.c	3 Nov 2008 08:06:59 -0000	1.190
+@@ -3717,7 +3717,7 @@ public_rEALLOc(Void_t* oldmem, size_t by
+       newp = public_mALLOc(bytes);
+       if (newp != NULL)
+ 	{
+-	  MALLOC_COPY (newp, oldmem, oldsize - 2 * SIZE_SZ);
++	  MALLOC_COPY (newp, oldmem, oldsize - SIZE_SZ);
+ #if THREAD_STATS
+ 	  if(!mutex_trylock(&ar_ptr->mutex))
+ 	    ++(ar_ptr->stat_lock_direct);

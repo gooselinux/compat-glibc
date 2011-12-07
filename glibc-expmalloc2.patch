@@ -1,0 +1,949 @@
+2009-03-13  Ulrich Drepper  <drepper@redhat.com>
+
+	* malloc/Makefile: Assume experimental-malloc flag.
+	* malloc/malloc.c: Implement PER_THREAD and ATOMIC_FASTBINS features.
+	* malloc/arena.c: Likewise.
+	* malloc/hooks.c: Likewise.
+	* malloc/malloc.h: Define M_ARENA_TEST and M_ARENA_MAX.
+
+--- libc/malloc/Makefile	16 Dec 2007 22:57:50 -0000	1.56
++++ libc/malloc/Makefile	13 Mar 2009 23:51:58 -0000	1.57
+@@ -124,6 +124,7 @@ endif
+ 
+ tst-mcheck-ENV = MALLOC_CHECK_=3
+ 
++CPPFLAGS-malloc.c += -DPER_THREAD -DATOMIC_FASTBINS
+ # Uncomment this for test releases.  For public releases it is too expensive.
+ #CPPFLAGS-malloc.o += -DMALLOC_DEBUG=1
+ 
+--- libc/malloc/arena.c	7 Feb 2009 22:01:22 -0000	1.31
++++ libc/malloc/arena.c	13 Mar 2009 23:52:10 -0000	1.32
+@@ -78,6 +78,10 @@ extern int sanity_check_heap_info_alignm
+ 
+ static tsd_key_t arena_key;
+ static mutex_t list_lock;
++#ifdef PER_THREAD
++static size_t narenas;
++static mstate free_list;
++#endif
+ 
+ #if THREAD_STATS
+ static int stat_n_heaps;
+@@ -105,13 +109,30 @@ int __malloc_initialized = -1;
+    in the new arena. */
+ 
+ #define arena_get(ptr, size) do { \
++  arena_lookup(ptr); \
++  arena_lock(ptr, size); \
++} while(0)
++
++#define arena_lookup(ptr) do { \
+   Void_t *vptr = NULL; \
+   ptr = (mstate)tsd_getspecific(arena_key, vptr); \
++} while(0)
++
++#ifdef PER_THREAD
++#define arena_lock(ptr, size) do { \
++  if(ptr) \
++    (void)mutex_lock(&ptr->mutex); \
++  else \
++    ptr = arena_get2(ptr, (size)); \
++} while(0)
++#else
++#define arena_lock(ptr, size) do { \
+   if(ptr && !mutex_trylock(&ptr->mutex)) { \
+     THREAD_STAT(++(ptr->stat_lock_direct)); \
+   } else \
+     ptr = arena_get2(ptr, (size)); \
+ } while(0)
++#endif
+ 
+ /* find the heap and corresponding arena for a given ptr */
+ 
+@@ -219,6 +240,11 @@ free_atfork(Void_t* mem, const Void_t *c
+   }
+ #endif
+ 
++#ifdef ATOMIC_FASTBINS
++  ar_ptr = arena_for_chunk(p);
++  tsd_getspecific(arena_key, vptr);
++  _int_free(ar_ptr, p, vptr == ATFORK_ARENA_PTR);
++#else
+   ar_ptr = arena_for_chunk(p);
+   tsd_getspecific(arena_key, vptr);
+   if(vptr != ATFORK_ARENA_PTR)
+@@ -226,6 +252,7 @@ free_atfork(Void_t* mem, const Void_t *c
+   _int_free(ar_ptr, p);
+   if(vptr != ATFORK_ARENA_PTR)
+     (void)mutex_unlock(&ar_ptr->mutex);
++#endif
+ }
+ 
+ 
+@@ -312,8 +339,17 @@ ptmalloc_unlock_all2 (void)
+   __malloc_hook = save_malloc_hook;
+   __free_hook = save_free_hook;
+ #endif
++#ifdef PER_THREAD
++  free_list = NULL;
++#endif
+   for(ar_ptr = &main_arena;;) {
+     mutex_init(&ar_ptr->mutex);
++#ifdef PER_THREAD
++    if (ar_ptr != save_arena) {
++      ar_ptr->next_free = free_list;
++      free_list = ar_ptr;
++    }
++#endif
+     ar_ptr = ar_ptr->next;
+     if(ar_ptr == &main_arena) break;
+   }
+@@ -377,6 +413,11 @@ ptmalloc_init_minimal (void)
+   mp_.mmap_threshold = DEFAULT_MMAP_THRESHOLD;
+   mp_.trim_threshold = DEFAULT_TRIM_THRESHOLD;
+   mp_.pagesize       = malloc_getpagesize;
++#ifdef PER_THREAD
++# define NARENAS_FROM_NCORES(n) ((n) * (sizeof(long) == 4 ? 2 : 8))
++  mp_.arena_test     = NARENAS_FROM_NCORES (1);
++  narenas = 1;
++#endif
+ }
+ 
+ 
+@@ -529,9 +570,25 @@ ptmalloc_init (void)
+ 		}
+ 	      break;
+ 	    case 9:
+-	      if (! secure && memcmp (envline, "MMAP_MAX_", 9) == 0)
+-		mALLOPt(M_MMAP_MAX, atoi(&envline[10]));
++	      if (! secure)
++		{
++		  if (memcmp (envline, "MMAP_MAX_", 9) == 0)
++		    mALLOPt(M_MMAP_MAX, atoi(&envline[10]));
++#ifdef PER_THREAD
++		  else if (memcmp (envline, "ARENA_MAX", 9) == 0)
++		    mALLOPt(M_ARENA_MAX, atoi(&envline[10]));
++#endif
++		}
+ 	      break;
++#ifdef PER_THREAD
++	    case 10:
++	      if (! secure)
++		{
++		  if (memcmp (envline, "ARENA_TEST", 10) == 0)
++		    mALLOPt(M_ARENA_TEST, atoi(&envline[11]));
++		}
++	      break;
++#endif
+ 	    case 15:
+ 	      if (! secure)
+ 		{
+@@ -875,9 +932,110 @@ _int_new_arena(size_t size)
+   top(a) = (mchunkptr)ptr;
+   set_head(top(a), (((char*)h + h->size) - ptr) | PREV_INUSE);
+ 
++  tsd_setspecific(arena_key, (Void_t *)a);
++  mutex_init(&a->mutex);
++  (void)mutex_lock(&a->mutex);
++
++#ifdef PER_THREAD
++  (void)mutex_lock(&list_lock);
++#endif
++
++  /* Add the new arena to the global list.  */
++  a->next = main_arena.next;
++  atomic_write_barrier ();
++  main_arena.next = a;
++
++#ifdef PER_THREAD
++  ++narenas;
++
++  (void)mutex_unlock(&list_lock);
++#endif
++
++  THREAD_STAT(++(a->stat_lock_loop));
++
+   return a;
+ }
+ 
++
++#ifdef PER_THREAD
++static mstate
++get_free_list (void)
++{
++  mstate result = free_list;
++  if (result != NULL)
++    {
++      (void)mutex_lock(&list_lock);
++      result = free_list;
++      if (result != NULL)
++	free_list = result->next_free;
++      (void)mutex_unlock(&list_lock);
++
++      if (result != NULL)
++	{
++	  (void)mutex_lock(&result->mutex);
++	  tsd_setspecific(arena_key, (Void_t *)result);
++	  THREAD_STAT(++(result->stat_lock_loop));
++	}
++    }
++
++  return result;
++}
++
++
++static mstate
++reused_arena (void)
++{
++  if (narenas <= mp_.arena_test)
++    return NULL;
++
++  static int narenas_limit;
++  if (narenas_limit == 0)
++    {
++      if (mp_.arena_max != 0)
++	narenas_limit = mp_.arena_max;
++      else
++	{
++	  int n  = __get_nprocs ();
++
++	  if (n >= 1)
++	    narenas_limit = NARENAS_FROM_NCORES (n);
++	  else
++	    /* We have no information about the system.  Assume two
++	       cores.  */
++	    narenas_limit = NARENAS_FROM_NCORES (2);
++	}
++    }
++
++  if (narenas < narenas_limit)
++    return NULL;
++
++  mstate result;
++  static mstate next_to_use;
++  if (next_to_use == NULL)
++    next_to_use = &main_arena;
++
++  result = next_to_use;
++  do
++    {
++      if (!mutex_trylock(&result->mutex))
++	goto out;
++
++      result = result->next;
++    }
++  while (result != next_to_use);
++
++  /* No arena available.  Wait for the next in line.  */
++  (void)mutex_lock(&result->mutex);
++
++ out:
++  tsd_setspecific(arena_key, (Void_t *)result);
++  THREAD_STAT(++(result->stat_lock_loop));
++  next_to_use = result->next;
++
++  return result;
++}
++#endif
++
+ static mstate
+ internal_function
+ #if __STD_C
+@@ -888,6 +1046,12 @@ arena_get2(a_tsd, size) mstate a_tsd; si
+ {
+   mstate a;
+ 
++#ifdef PER_THREAD
++  if ((a = get_free_list ()) == NULL
++      && (a = reused_arena ()) == NULL)
++    /* Nothing immediately available, so generate a new arena.  */
++    a = _int_new_arena(size);
++#else
+   if(!a_tsd)
+     a = a_tsd = &main_arena;
+   else {
+@@ -930,24 +1094,31 @@ arena_get2(a_tsd, size) mstate a_tsd; si
+ 
+   /* Nothing immediately available, so generate a new arena.  */
+   a = _int_new_arena(size);
+-  if(a)
+-    {
+-      tsd_setspecific(arena_key, (Void_t *)a);
+-      mutex_init(&a->mutex);
+-      mutex_lock(&a->mutex); /* remember result */
+-
+-      /* Add the new arena to the global list.  */
+-      a->next = main_arena.next;
+-      atomic_write_barrier ();
+-      main_arena.next = a;
+-
+-      THREAD_STAT(++(a->stat_lock_loop));
+-    }
+   (void)mutex_unlock(&list_lock);
++#endif
+ 
+   return a;
+ }
+ 
++#ifdef PER_THREAD
++static void __attribute__ ((section ("__libc_thread_freeres_fn")))
++arena_thread_freeres (void)
++{
++  Void_t *vptr = NULL;
++  mstate a = tsd_getspecific(arena_key, vptr);
++  tsd_setspecific(arena_key, NULL);
++
++  if (a != NULL)
++    {
++      (void)mutex_lock(&list_lock);
++      a->next_free = free_list;
++      free_list = a;
++      (void)mutex_unlock(&list_lock);
++    }
++}
++text_set_element (__libc_thread_subfreeres, arena_thread_freeres);
++#endif
++
+ #endif /* USE_ARENAS */
+ 
+ /*
+--- libc/malloc/hooks.c	7 Feb 2009 22:49:24 -0000	1.25
++++ libc/malloc/hooks.c	13 Mar 2009 23:52:10 -0000	1.26
+@@ -275,17 +275,13 @@ free_check(mem, caller) Void_t* mem; con
+   mchunkptr p;
+ 
+   if(!mem) return;
+-  (void)mutex_lock(&main_arena.mutex);
+   p = mem2chunk_check(mem, NULL);
+   if(!p) {
+-    (void)mutex_unlock(&main_arena.mutex);
+-
+     malloc_printerr(check_action, "free(): invalid pointer", mem);
+     return;
+   }
+ #if HAVE_MMAP
+   if (chunk_is_mmapped(p)) {
+-    (void)mutex_unlock(&main_arena.mutex);
+     munmap_chunk(p);
+     return;
+   }
+@@ -293,8 +289,13 @@ free_check(mem, caller) Void_t* mem; con
+ #if 0 /* Erase freed memory. */
+   memset(mem, 0, chunksize(p) - (SIZE_SZ+1));
+ #endif
++#ifdef ATOMIC_FASTBINS
++  _int_free(&main_arena, p, 0);
++#else
++  (void)mutex_lock(&main_arena.mutex);
+   _int_free(&main_arena, p);
+   (void)mutex_unlock(&main_arena.mutex);
++#endif
+ }
+ 
+ static Void_t*
+@@ -472,7 +473,11 @@ free_starter(mem, caller) Void_t* mem; c
+     return;
+   }
+ #endif
++#ifdef ATOMIC_FASTBINS
++  _int_free(&main_arena, p, 1);
++#else
+   _int_free(&main_arena, p);
++#endif
+ }
+ 
+ # endif	/* !defiend NO_STARTER */
+@@ -584,7 +589,7 @@ public_sET_STATe(Void_t* msptr)
+   clear_fastchunks(&main_arena);
+   set_max_fast(DEFAULT_MXFAST);
+   for (i=0; i<NFASTBINS; ++i)
+-    main_arena.fastbins[i] = 0;
++    fastbin (&main_arena, i) = 0;
+   for (i=0; i<BINMAPSIZE; ++i)
+     main_arena.binmap[i] = 0;
+   top(&main_arena) = ms->av[2];
+--- libc/malloc/malloc.c	7 Feb 2009 22:48:59 -0000	1.194
++++ libc/malloc/malloc.c	13 Mar 2009 23:52:10 -0000	1.195
+@@ -212,7 +212,7 @@
+ 
+     Tuning options that are also dynamically changeable via mallopt:
+ 
+-    DEFAULT_MXFAST             64
++    DEFAULT_MXFAST             64 (for 32bit), 128 (for 64bit)
+     DEFAULT_TRIM_THRESHOLD     128 * 1024
+     DEFAULT_TOP_PAD            0
+     DEFAULT_MMAP_THRESHOLD     128 * 1024
+@@ -258,8 +258,12 @@
+ #include <malloc-machine.h>
+ 
+ #ifdef _LIBC
++#ifdef ATOMIC_FASTBINS
++#include <atomic.h>
++#endif
+ #include <stdio-common/_itoa.h>
+ #include <bits/wordsize.h>
++#include <sys/sysinfo.h>
+ #endif
+ 
+ #ifdef __cplusplus
+@@ -325,12 +329,7 @@ extern "C" {
+   or other mallocs available that do this.
+ */
+ 
+-#if MALLOC_DEBUG
+ #include <assert.h>
+-#else
+-#undef	assert
+-#define assert(x) ((void)0)
+-#endif
+ 
+ 
+ /*
+@@ -1312,7 +1311,7 @@ int      __posix_memalign(void **, size_
+ #endif
+ 
+ #ifndef DEFAULT_MXFAST
+-#define DEFAULT_MXFAST     64
++#define DEFAULT_MXFAST     (64 * SIZE_SZ / 4)
+ #endif
+ 
+ 
+@@ -1586,7 +1585,11 @@ typedef struct malloc_chunk* mchunkptr;
+ #if __STD_C
+ 
+ static Void_t*  _int_malloc(mstate, size_t);
++#ifdef ATOMIC_FASTBINS
++static void     _int_free(mstate, mchunkptr, int);
++#else
+ static void     _int_free(mstate, mchunkptr);
++#endif
+ static Void_t*  _int_realloc(mstate, mchunkptr, INTERNAL_SIZE_T);
+ static Void_t*  _int_memalign(mstate, size_t, size_t);
+ static Void_t*  _int_valloc(mstate, size_t);
+@@ -2228,12 +2231,15 @@ typedef struct malloc_chunk* mbinptr;
+ */
+ 
+ typedef struct malloc_chunk* mfastbinptr;
++#define fastbin(ar_ptr, idx) ((ar_ptr)->fastbinsY[idx])
+ 
+ /* offset 2 to use otherwise unindexable first 2 bins */
+-#define fastbin_index(sz)        ((((unsigned int)(sz)) >> 3) - 2)
++#define fastbin_index(sz) \
++  ((((unsigned int)(sz)) >> (SIZE_SZ == 8 ? 4 : 3)) - 2)
++
+ 
+ /* The maximum fastbin request size we support */
+-#define MAX_FAST_SIZE     80
++#define MAX_FAST_SIZE     (80 * SIZE_SZ / 4)
+ 
+ #define NFASTBINS  (fastbin_index(request2size(MAX_FAST_SIZE))+1)
+ 
+@@ -2268,8 +2274,13 @@ typedef struct malloc_chunk* mfastbinptr
+ #define FASTCHUNKS_BIT        (1U)
+ 
+ #define have_fastchunks(M)     (((M)->flags &  FASTCHUNKS_BIT) == 0)
++#ifdef ATOMIC_FASTBINS
++#define clear_fastchunks(M)    catomic_or (&(M)->flags, FASTCHUNKS_BIT)
++#define set_fastchunks(M)      catomic_and (&(M)->flags, ~FASTCHUNKS_BIT)
++#else
+ #define clear_fastchunks(M)    ((M)->flags |=  FASTCHUNKS_BIT)
+ #define set_fastchunks(M)      ((M)->flags &= ~FASTCHUNKS_BIT)
++#endif
+ 
+ /*
+   NONCONTIGUOUS_BIT indicates that MORECORE does not return contiguous
+@@ -2316,7 +2327,7 @@ struct malloc_state {
+ #endif
+ 
+   /* Fastbins */
+-  mfastbinptr      fastbins[NFASTBINS];
++  mfastbinptr      fastbinsY[NFASTBINS];
+ 
+   /* Base of the topmost chunk -- not otherwise kept in a bin */
+   mchunkptr        top;
+@@ -2333,6 +2344,11 @@ struct malloc_state {
+   /* Linked list */
+   struct malloc_state *next;
+ 
++#ifdef PER_THREAD
++  /* Linked list for free arenas.  */
++  struct malloc_state *next_free;
++#endif
++
+   /* Memory allocated from the system in this arena.  */
+   INTERNAL_SIZE_T system_mem;
+   INTERNAL_SIZE_T max_system_mem;
+@@ -2343,6 +2359,10 @@ struct malloc_par {
+   unsigned long    trim_threshold;
+   INTERNAL_SIZE_T  top_pad;
+   INTERNAL_SIZE_T  mmap_threshold;
++#ifdef PER_THREAD
++  INTERNAL_SIZE_T  arena_test;
++  INTERNAL_SIZE_T  arena_max;
++#endif
+ 
+   /* Memory map support */
+   int              n_mmaps;
+@@ -2380,6 +2400,13 @@ static struct malloc_state main_arena;
+ static struct malloc_par mp_;
+ 
+ 
++#ifdef PER_THREAD
++/*  Non public mallopt parameters.  */
++#define M_ARENA_TEST -7
++#define M_ARENA_MAX  -8
++#endif
++
++
+ /* Maximum size of memory handled in fastbins.  */
+ static INTERNAL_SIZE_T global_max_fast;
+ 
+@@ -2761,7 +2788,7 @@ static void do_check_malloc_state(mstate
+   max_fast_bin = fastbin_index(get_max_fast ());
+ 
+   for (i = 0; i < NFASTBINS; ++i) {
+-    p = av->fastbins[i];
++    p = fastbin (av, i);
+ 
+     /* all bins past max_fast are empty */
+     if (i > max_fast_bin)
+@@ -3004,8 +3031,10 @@ static Void_t* sYSMALLOc(nb, av) INTERNA
+   /* Precondition: not enough current space to satisfy nb request */
+   assert((unsigned long)(old_size) < (unsigned long)(nb + MINSIZE));
+ 
++#ifndef ATOMIC_FASTBINS
+   /* Precondition: all fastbins are consolidated */
+   assert(!have_fastchunks(av));
++#endif
+ 
+ 
+   if (av != &main_arena) {
+@@ -3051,7 +3080,11 @@ static Void_t* sYSMALLOc(nb, av) INTERNA
+ 	set_head(chunk_at_offset(old_top, old_size), (2*SIZE_SZ)|PREV_INUSE);
+ 	set_foot(chunk_at_offset(old_top, old_size), (2*SIZE_SZ));
+ 	set_head(old_top, old_size|PREV_INUSE|NON_MAIN_ARENA);
++#ifdef ATOMIC_FASTBINS
++	_int_free(av, old_top, 1);
++#else
+ 	_int_free(av, old_top);
++#endif
+       } else {
+ 	set_head(old_top, (old_size + 2*SIZE_SZ)|PREV_INUSE);
+ 	set_foot(old_top, (old_size + 2*SIZE_SZ));
+@@ -3290,7 +3323,11 @@ static Void_t* sYSMALLOc(nb, av) INTERNA
+ 
+           /* If possible, release the rest. */
+           if (old_size >= MINSIZE) {
++#ifdef ATOMIC_FASTBINS
++            _int_free(av, old_top, 1);
++#else
+             _int_free(av, old_top);
++#endif
+           }
+ 
+         }
+@@ -3512,7 +3549,40 @@ public_mALLOc(size_t bytes)
+   if (__builtin_expect (hook != NULL, 0))
+     return (*hook)(bytes, RETURN_ADDRESS (0));
+ 
+-  arena_get(ar_ptr, bytes);
++  arena_lookup(ar_ptr);
++#if 0
++  // XXX We need double-word CAS and fastbins must be extended to also
++  // XXX hold a generation counter for each entry.
++  if (ar_ptr) {
++    INTERNAL_SIZE_T nb;               /* normalized request size */
++    checked_request2size(bytes, nb);
++    if (nb <= get_max_fast ()) {
++      long int idx = fastbin_index(nb);
++      mfastbinptr* fb = &fastbin (ar_ptr, idx);
++      mchunkptr pp = *fb;
++      mchunkptr v;
++      do
++	{
++	  v = pp;
++	  if (v == NULL)
++	    break;
++	}
++      while ((pp = catomic_compare_and_exchange_val_acq (fb, v->fd, v)) != v);
++      if (v != 0) {
++	if (__builtin_expect (fastbin_index (chunksize (v)) != idx, 0))
++	  malloc_printerr (check_action, "malloc(): memory corruption (fast)",
++			   chunk2mem (v));
++	check_remalloced_chunk(ar_ptr, v, nb);
++	void *p = chunk2mem(v);
++	if (__builtin_expect (perturb_byte, 0))
++	  alloc_perturb (p, bytes);
++	return p;
++      }
++    }
++  }
++#endif
++
++  arena_lock(ar_ptr, bytes);
+   if(!ar_ptr)
+     return 0;
+   victim = _int_malloc(ar_ptr, bytes);
+@@ -3578,18 +3648,22 @@ public_fREe(Void_t* mem)
+ #endif
+ 
+   ar_ptr = arena_for_chunk(p);
+-#if THREAD_STATS
++#ifdef ATOMIC_FASTBINS
++  _int_free(ar_ptr, p, 0);
++#else
++# if THREAD_STATS
+   if(!mutex_trylock(&ar_ptr->mutex))
+     ++(ar_ptr->stat_lock_direct);
+   else {
+     (void)mutex_lock(&ar_ptr->mutex);
+     ++(ar_ptr->stat_lock_wait);
+   }
+-#else
++# else
+   (void)mutex_lock(&ar_ptr->mutex);
+-#endif
++# endif
+   _int_free(ar_ptr, p);
+   (void)mutex_unlock(&ar_ptr->mutex);
++#endif
+ }
+ #ifdef libc_hidden_def
+ libc_hidden_def (public_fREe)
+@@ -3665,7 +3739,7 @@ public_rEALLOc(Void_t* oldmem, size_t by
+   (void)mutex_lock(&ar_ptr->mutex);
+ #endif
+ 
+-#ifndef NO_THREADS
++#if !defined NO_THREADS && !defined PER_THREAD
+   /* As in malloc(), remember this arena for the next allocation. */
+   tsd_setspecific(arena_key, (Void_t *)ar_ptr);
+ #endif
+@@ -3683,18 +3757,22 @@ public_rEALLOc(Void_t* oldmem, size_t by
+       if (newp != NULL)
+ 	{
+ 	  MALLOC_COPY (newp, oldmem, oldsize - SIZE_SZ);
+-#if THREAD_STATS
++#ifdef ATOMIC_FASTBINS
++	  _int_free(ar_ptr, oldp, 0);
++#else
++# if THREAD_STATS
+ 	  if(!mutex_trylock(&ar_ptr->mutex))
+ 	    ++(ar_ptr->stat_lock_direct);
+ 	  else {
+ 	    (void)mutex_lock(&ar_ptr->mutex);
+ 	    ++(ar_ptr->stat_lock_wait);
+ 	  }
+-#else
++# else
+ 	  (void)mutex_lock(&ar_ptr->mutex);
+-#endif
++# endif
+ 	  _int_free(ar_ptr, oldp);
+ 	  (void)mutex_unlock(&ar_ptr->mutex);
++#endif
+ 	}
+     }
+ 
+@@ -4092,7 +4170,6 @@ _int_malloc(mstate av, size_t bytes)
+   INTERNAL_SIZE_T nb;               /* normalized request size */
+   unsigned int    idx;              /* associated bin index */
+   mbinptr         bin;              /* associated bin */
+-  mfastbinptr*    fb;               /* associated fastbin */
+ 
+   mchunkptr       victim;           /* inspected/selected chunk */
+   INTERNAL_SIZE_T size;             /* its size */
+@@ -4126,13 +4203,28 @@ _int_malloc(mstate av, size_t bytes)
+   */
+ 
+   if ((unsigned long)(nb) <= (unsigned long)(get_max_fast ())) {
+-    long int idx = fastbin_index(nb);
+-    fb = &(av->fastbins[idx]);
+-    if ( (victim = *fb) != 0) {
++    idx = fastbin_index(nb);
++    mfastbinptr* fb = &fastbin (av, idx);
++#ifdef ATOMIC_FASTBINS
++    mchunkptr pp = *fb;
++    do
++      {
++	victim = pp;
++	if (victim == NULL)
++	  break;
++      }
++    while ((pp = catomic_compare_and_exchange_val_acq (fb, victim->fd, victim))
++	   != victim);
++#else
++    victim = *fb;
++#endif
++    if (victim != 0) {
+       if (__builtin_expect (fastbin_index (chunksize (victim)) != idx, 0))
+ 	malloc_printerr (check_action, "malloc(): memory corruption (fast)",
+ 			 chunk2mem (victim));
++#ifndef ATOMIC_FASTBINS
+       *fb = victim->fd;
++#endif
+       check_remalloced_chunk(av, victim, nb);
+       void *p = chunk2mem(victim);
+       if (__builtin_expect (perturb_byte, 0))
+@@ -4525,6 +4617,18 @@ _int_malloc(mstate av, size_t bytes)
+       return p;
+     }
+ 
++#ifdef ATOMIC_FASTBINS
++    /* When we are using atomic ops to free fast chunks we can get
++       here for all block sizes.  */
++    else if (have_fastchunks(av)) {
++      malloc_consolidate(av);
++      /* restore original bin index */
++      if (in_smallbin_range(nb))
++	idx = smallbin_index(nb);
++      else
++	idx = largebin_index(nb);
++    }
++#else
+     /*
+       If there is space available in fastbins, consolidate and retry,
+       to possibly avoid expanding memory. This can occur only if nb is
+@@ -4536,6 +4640,7 @@ _int_malloc(mstate av, size_t bytes)
+       malloc_consolidate(av);
+       idx = smallbin_index(nb); /* restore original bin index */
+     }
++#endif
+ 
+     /*
+        Otherwise, relay to handle system-dependent cases
+@@ -4554,7 +4659,11 @@ _int_malloc(mstate av, size_t bytes)
+ */
+ 
+ static void
++#ifdef ATOMIC_FASTBINS
++_int_free(mstate av, mchunkptr p, int have_lock)
++#else
+ _int_free(mstate av, mchunkptr p)
++#endif
+ {
+   INTERNAL_SIZE_T size;        /* its size */
+   mfastbinptr*    fb;          /* associated fastbin */
+@@ -4566,6 +4675,9 @@ _int_free(mstate av, mchunkptr p)
+   mchunkptr       fwd;         /* misc temp for linking */
+ 
+   const char *errstr = NULL;
++#ifdef ATOMIC_FASTBINS
++  int locked = 0;
++#endif
+ 
+   size = chunksize(p);
+ 
+@@ -4578,6 +4690,10 @@ _int_free(mstate av, mchunkptr p)
+     {
+       errstr = "free(): invalid pointer";
+     errout:
++#ifdef ATOMIC_FASTBINS
++      if (! have_lock && locked)
++	(void)mutex_unlock(&av->mutex);
++#endif
+       malloc_printerr (check_action, errstr, chunk2mem(p));
+       return;
+     }
+@@ -4614,8 +4730,28 @@ _int_free(mstate av, mchunkptr p)
+ 	goto errout;
+       }
+ 
++    if (__builtin_expect (perturb_byte, 0))
++      free_perturb (chunk2mem(p), size - SIZE_SZ);
++
+     set_fastchunks(av);
+-    fb = &(av->fastbins[fastbin_index(size)]);
++    fb = &fastbin (av, fastbin_index(size));
++
++#ifdef ATOMIC_FASTBINS
++    mchunkptr fd;
++    mchunkptr old = *fb;
++    do
++      {
++	/* Another simple check: make sure the top of the bin is not the
++	   record we are going to add (i.e., double free).  */
++	if (__builtin_expect (old == p, 0))
++	  {
++	    errstr = "double free or corruption (fasttop)";
++	    goto errout;
++	  }
++	p->fd = fd = old;
++      }
++    while ((old = catomic_compare_and_exchange_val_acq (fb, p, fd)) != fd);
++#else
+     /* Another simple check: make sure the top of the bin is not the
+        record we are going to add (i.e., double free).  */
+     if (__builtin_expect (*fb == p, 0))
+@@ -4624,11 +4760,9 @@ _int_free(mstate av, mchunkptr p)
+ 	goto errout;
+       }
+ 
+-    if (__builtin_expect (perturb_byte, 0))
+-      free_perturb (chunk2mem(p), size - SIZE_SZ);
+-
+     p->fd = *fb;
+     *fb = p;
++#endif
+   }
+ 
+   /*
+@@ -4636,6 +4770,22 @@ _int_free(mstate av, mchunkptr p)
+   */
+ 
+   else if (!chunk_is_mmapped(p)) {
++#ifdef ATOMIC_FASTBINS
++    if (! have_lock) {
++# if THREAD_STATS
++      if(!mutex_trylock(&av->mutex))
++	++(av->stat_lock_direct);
++      else {
++	(void)mutex_lock(&av->mutex);
++	++(av->stat_lock_wait);
++      }
++# else
++      (void)mutex_lock(&av->mutex);
++# endif
++      locked = 1;
++    }
++#endif
++
+     nextchunk = chunk_at_offset(p, size);
+ 
+     /* Lightweight tests: check whether the block is already the
+@@ -4759,6 +4909,12 @@ _int_free(mstate av, mchunkptr p)
+       }
+     }
+ 
++#ifdef ATOMIC_FASTBINS
++    if (! have_lock) {
++      assert (locked);
++      (void)mutex_unlock(&av->mutex);
++    }
++#endif
+   }
+   /*
+     If the chunk was allocated via mmap, release via munmap(). Note
+@@ -4829,11 +4985,19 @@ static void malloc_consolidate(av) mstat
+       reused anyway.
+     */
+ 
+-    maxfb = &(av->fastbins[fastbin_index(get_max_fast ())]);
+-    fb = &(av->fastbins[0]);
++    maxfb = &fastbin (av, fastbin_index(get_max_fast ()));
++
++    fb = &fastbin (av, 0);
+     do {
+-      if ( (p = *fb) != 0) {
+-        *fb = 0;
++#ifdef ATOMIC_FASTBINS
++	p = atomic_exchange_acq (fb, 0);
++#else   
++	p = *fb;
++#endif
++	if (p != 0) {
++#ifndef ATOMIC_FASTBINS
++	  *fb = 0;
++#endif
+ 
+         do {
+           check_inuse_chunk(av, p);
+@@ -5027,7 +5191,11 @@ _int_realloc(mstate av, mchunkptr oldp, 
+             }
+           }
+ 
++#ifdef ATOMIC_FASTBINS
++          _int_free(av, oldp, 1);
++#else
+           _int_free(av, oldp);
++#endif
+           check_inuse_chunk(av, newp);
+           return chunk2mem(newp);
+         }
+@@ -5051,7 +5219,11 @@ _int_realloc(mstate av, mchunkptr oldp, 
+ 	       (av != &main_arena ? NON_MAIN_ARENA : 0));
+       /* Mark remainder as inuse so free() won't complain */
+       set_inuse_bit_at_offset(remainder, remainder_size);
++#ifdef ATOMIC_FASTBINS
++      _int_free(av, remainder, 1);
++#else
+       _int_free(av, remainder);
++#endif
+     }
+ 
+     check_inuse_chunk(av, newp);
+@@ -5110,7 +5282,11 @@ _int_realloc(mstate av, mchunkptr oldp, 
+       newmem = _int_malloc(av, nb - MALLOC_ALIGN_MASK);
+       if (newmem != 0) {
+         MALLOC_COPY(newmem, chunk2mem(oldp), oldsize - 2*SIZE_SZ);
++#ifdef ATOMIC_FASTBINS
++        _int_free(av, oldp, 1);
++#else
+         _int_free(av, oldp);
++#endif
+       }
+     }
+     return newmem;
+@@ -5204,7 +5380,11 @@ _int_memalign(mstate av, size_t alignmen
+ 	     (av != &main_arena ? NON_MAIN_ARENA : 0));
+     set_inuse_bit_at_offset(newp, newsize);
+     set_head_size(p, leadsize | (av != &main_arena ? NON_MAIN_ARENA : 0));
++#ifdef ATOMIC_FASTBINS
++    _int_free(av, p, 1);
++#else
+     _int_free(av, p);
++#endif
+     p = newp;
+ 
+     assert (newsize >= nb &&
+@@ -5220,7 +5400,11 @@ _int_memalign(mstate av, size_t alignmen
+       set_head(remainder, remainder_size | PREV_INUSE |
+ 	       (av != &main_arena ? NON_MAIN_ARENA : 0));
+       set_head_size(p, nb);
++#ifdef ATOMIC_FASTBINS
++      _int_free(av, remainder, 1);
++#else
+       _int_free(av, remainder);
++#endif
+     }
+   }
+ 
+@@ -5607,7 +5791,7 @@ struct mallinfo mALLINFo(mstate av)
+   fastavail = 0;
+ 
+   for (i = 0; i < NFASTBINS; ++i) {
+-    for (p = av->fastbins[i]; p != 0; p = p->fd) {
++    for (p = fastbin (av, i); p != 0; p = p->fd) {
+       ++nfastblocks;
+       fastavail += chunksize(p);
+     }
+@@ -5775,6 +5959,18 @@ int mALLOPt(param_number, value) int par
+   case M_PERTURB:
+     perturb_byte = value;
+     break;
++
++#ifdef PER_THREAD
++  case M_ARENA_TEST:
++    if (value > 0)
++      mp_.arena_test = value;
++    break;
++
++  case M_ARENA_MAX:
++    if (value > 0)
++      mp_.arena_max = value;
++    break;
++#endif
+   }
+   (void)mutex_unlock(&av->mutex);
+   return res;
+--- libc/malloc/malloc.h	19 Jul 2007 17:05:07 -0000	1.30
++++ libc/malloc/malloc.h	13 Mar 2009 23:52:20 -0000	1.31
+@@ -127,6 +127,8 @@ extern struct mallinfo mallinfo __MALLOC
+ #define M_MMAP_MAX          -4
+ #define M_CHECK_ACTION      -5
+ #define M_PERTURB	    -6
++#define M_ARENA_TEST	    -7
++#define M_ARENA_MAX	    -8
+ 
+ /* General SVID/XPG interface to tunable parameters. */
+ extern int mallopt __MALLOC_P ((int __param, int __val));

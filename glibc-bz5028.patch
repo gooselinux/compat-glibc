@@ -1,0 +1,18 @@
+2007-09-13  Aurelien Jarno  <aurelien@aurel32.net>
+
+	[BZ #5028]
+	* posix/regcomp.c (lookup_collation_sequence_value): Check that
+	nrules != 0 for multibyte chars.
+
+--- libc/posix/regcomp.c	5 Feb 2007 15:23:49 -0000	1.113
++++ libc/posix/regcomp.c	24 Sep 2007 03:31:25 -0000	1.114
+@@ -2771,7 +2771,8 @@ parse_bracket_exp (re_string_t *regexp, 
+ 	}
+       else if (br_elem->type == MB_CHAR)
+ 	{
+-	  return __collseq_table_lookup (collseqwc, br_elem->opr.wch);
++	  if (nrules != 0)
++	    return __collseq_table_lookup (collseqwc, br_elem->opr.wch);
+ 	}
+       else if (br_elem->type == COLL_SYM)
+ 	{

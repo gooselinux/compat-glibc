@@ -1,0 +1,23 @@
+2006-10-12  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #3320]
+	* locales/es_ES (LC_TIME): Add week, first_weekday, and first_workday.
+
+--- libc/localedata/locales/es_ES	2006-07-31 09:16:59.000000000 +0200
++++ libc/localedata/locales/es_ES	2006-10-25 20:59:21.000000000 +0200
+@@ -2187,12 +2187,13 @@ t_fmt_ampm ""
+ date_fmt	"<U0025><U0061><U0020><U0025><U0062><U0020><U0025><U0065>/
+ <U0020><U0025><U0048><U003A><U0025><U004D><U003A><U0025><U0053><U0020>/
+ <U0025><U005A><U0020><U0025><U0059>"
++week    7;19971130;5
++first_weekday   2
++first_workday   2
+ END LC_TIME
+ 
+ LC_PAPER
+-% FIXME
+ height   297
+-% FIXME
+ width    210
+ END LC_PAPER
+ 

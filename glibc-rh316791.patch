@@ -1,0 +1,15 @@
+--- libc/manual/startup.texi	10 Nov 2006 21:10:22 -0000	1.50
++++ libc/manual/startup.texi	28 Oct 2007 01:52:39 -0000	1.51
+@@ -309,9 +309,9 @@ character, since this is assumed to term
+ 
+ The value of an environment variable can be accessed with the
+ @code{getenv} function.  This is declared in the header file
+-@file{stdlib.h}.  All of the following functions can be safely used in
+-multi-threaded programs.  It is made sure that concurrent modifications
+-to the environment do not lead to errors.
++@file{stdlib.h}.  Modifications of enviroment variables are not
++allowed in Multi-threaded programs.  The @code{getenv} function
++can be safely used in multi-threaded programs
+ @pindex stdlib.h
+ 
+ @comment stdlib.h

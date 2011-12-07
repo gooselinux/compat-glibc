@@ -1,0 +1,808 @@
+2008-04-11  Jakub Jelinek  <jakub@redhat.com>
+
+	[BZ #5443]
+	* time/era.c: Transform __libc_setlocale_lock into rwlock.
+	* time/alt_digit.c: Likewise.
+	* wcsmbs/wcsmbsload.c: Likewise.
+
+2008-03-30  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #5443]
+	* intl/dcigettext.c (__dcigettext): Get reader lock for locale data
+	before looking for translation.
+	* locale/duplocale.c: Transform __libc_setlocale_lock into rwlock.
+	* locale/freelocale.c: Likewise.
+	* locale/newlocale.c: Likewise.
+	* locale/setlocale.c: Likewise.
+	Based partially on a patch by ryo@np.css.fujitsu.com.
+
+2008-03-30  Jakub Jelinek  <jakub@redhat.com>
+
+	* intl/dcigettext.c (_nl_find_msg): Reread nconversions after
+	acquiring wrlock.  Do conv_tab allocation while holding lock.
+	* intl/Makefile: Add rules to build and run tst-gettext6.
+	* intl/tst-gettext6.c: New test.
+	* intl/tst-gettext6.sh: New file.
+localedata/
+	* Makefile (LOCALES): Add ja_JP.UTF-8.
+
+2007-10-13  Bruno Haible  <bruno@clisp.org>
+
+	* intl/dcigettext.c (_nl_find_msg): Unlock the conversions_lock
+	when we cannot recode the message.
+
+2007-10-10  Jakub Jelinek  <jakub@redhat.com>
+
+nptl/
+	* sysdeps/pthread/bits/libc-lock.h (__libc_rwlock_init): Inside of
+	libc.so just clear NAME.
+	(__libc_rwlock_fini): Nop inside of libc.so.
+	* tst-initializers1.c (main): Test if PTHREAD_RWLOCK_INITIALIZER is
+	all zeros.
+
+2007-09-24  Ulrich Drepper  <drepper@redhat.com>
+
+	[BZ #5058]
+	* intl/gettextP.h (struct loaded_domain): Add conversions_lock member.
+	* intl/loadmsgcat.c (_nl_load_domain): Initialize conversions_lock.
+	(_nl_unload_domain): Finalize conversions_lock.
+	* intl/dcigettext.c (_nl_find_msg): Take conversions_lock before
+	handling table of known conversions.
+
+--- libc/intl/gettextP.h.jj	2005-04-05 00:29:14.000000000 +0200
++++ libc/intl/gettextP.h	2008-04-09 09:29:02.000000000 +0200
+@@ -146,6 +146,7 @@ struct loaded_domain
+   /* Cache of charset conversions of the translated strings.  */
+   struct converted_domain *conversions;
+   size_t nconversions;
++  __libc_rwlock_define (, conversions_lock);
+ 
+   struct expression *plural;
+   unsigned long int nplurals;
+--- libc/intl/dcigettext.c.jj	2008-04-09 09:19:08.000000000 +0200
++++ libc/intl/dcigettext.c	2008-04-09 09:29:11.000000000 +0200
+@@ -444,6 +444,11 @@ DCIGETTEXT (domainname, msgid1, msgid2, 
+ 	    : n == 1 ? (char *) msgid1 : (char *) msgid2);
+ #endif
+ 
++#ifdef _LIBC
++  __libc_rwlock_define (extern, __libc_setlocale_lock attribute_hidden)
++  __libc_rwlock_rdlock (__libc_setlocale_lock);
++#endif
++
+   __libc_rwlock_rdlock (_nl_state_lock);
+ 
+   /* If DOMAINNAME is NULL, we are interested in the default domain.  If
+@@ -464,7 +469,7 @@ DCIGETTEXT (domainname, msgid1, msgid2, 
+   search->category = category;
+ # ifdef HAVE_PER_THREAD_LOCALE
+ #  ifdef _LIBC
+-  localename = __current_locale_name (category);
++  localename = strdupa (__current_locale_name (category));
+ #  endif
+   search->localename = localename;
+ # endif
+@@ -488,6 +493,9 @@ DCIGETTEXT (domainname, msgid1, msgid2, 
+       else
+ 	retval = (char *) (*foundp)->translation;
+ 
++# ifdef _LIBC
++      __libc_rwlock_unlock (__libc_setlocale_lock);
++# endif
+       __libc_rwlock_unlock (_nl_state_lock);
+       return retval;
+     }
+@@ -547,6 +555,7 @@ DCIGETTEXT (domainname, msgid1, msgid2, 
+ 	  /* We cannot get the current working directory.  Don't signal an
+ 	     error but simply return the default string.  */
+ 	  FREE_BLOCKS (block_list);
++	  __libc_rwlock_unlock (__libc_setlocale_lock);
+ 	  __libc_rwlock_unlock (_nl_state_lock);
+ 	  __set_errno (saved_errno);
+ 	  return (plural == 0
+@@ -613,6 +622,7 @@ DCIGETTEXT (domainname, msgid1, msgid2, 
+ 	{
+ 	no_translation:
+ 	  FREE_BLOCKS (block_list);
++	  __libc_rwlock_unlock (__libc_setlocale_lock);
+ 	  __libc_rwlock_unlock (_nl_state_lock);
+ 	  __set_errno (saved_errno);
+ 	  return (plural == 0
+@@ -723,6 +733,7 @@ DCIGETTEXT (domainname, msgid1, msgid2, 
+ 	      if (plural)
+ 		retval = plural_lookup (domain, n, retval, retlen);
+ 
++	      __libc_rwlock_unlock (__libc_setlocale_lock);
+ 	      __libc_rwlock_unlock (_nl_state_lock);
+ 	      return retval;
+ 	    }
+@@ -850,6 +861,9 @@ _nl_find_msg (domain_file, domainbinding
+       /* We are supposed to do a conversion.  */
+       const char *encoding = get_output_charset (domainbinding);
+ 
++      /* Protect against reallocation of the table.  */
++      __libc_rwlock_rdlock (domain->conversions_lock);
++
+       /* Search whether a table with converted translations for this
+ 	 encoding has already been allocated.  */
+       size_t nconversions = domain->nconversions;
+@@ -866,8 +880,26 @@ _nl_find_msg (domain_file, domainbinding
+ 	    }
+ 	}
+ 
++      __libc_rwlock_unlock (domain->conversions_lock);
++
+       if (convd == NULL)
+ 	{
++	  /* We have to allocate a new conversions table.  */
++	  __libc_rwlock_wrlock (domain->conversions_lock);
++	  nconversions = domain->nconversions;
++
++	  /* Maybe in the meantime somebody added the translation.
++	     Recheck.  */
++	  for (i = nconversions; i > 0; )
++	    {
++	      i--;
++	      if (strcmp (domain->conversions[i].encoding, encoding) == 0)
++		{
++		  convd = &domain->conversions[i];
++		  goto found_convd;
++		}
++	    }
++
+ 	  /* Allocate a table for the converted translations for this
+ 	     encoding.  */
+ 	  struct converted_domain *new_conversions =
+@@ -876,9 +908,13 @@ _nl_find_msg (domain_file, domainbinding
+ 		     (nconversions + 1) * sizeof (struct converted_domain));
+ 
+ 	  if (__builtin_expect (new_conversions == NULL, 0))
+-	    /* Nothing we can do, no more memory.  We cannot use the
+-	       translation because it might be encoded incorrectly.  */
+-	    return (char *) -1;
++	    {
++	      /* Nothing we can do, no more memory.  We cannot use the
++		 translation because it might be encoded incorrectly.  */
++	    unlock_fail:
++	      __libc_rwlock_unlock (domain->conversions_lock);
++	      return (char *) -1;
++	    }
+ 
+ 	  domain->conversions = new_conversions;
+ 
+@@ -887,7 +923,7 @@ _nl_find_msg (domain_file, domainbinding
+ 	  if (__builtin_expect (encoding == NULL, 0))
+ 	    /* Nothing we can do, no more memory.  We cannot use the
+ 	       translation because it might be encoded incorrectly.  */
+-	    return (char *) -1;
++	    goto unlock_fail;
+ 
+ 	  convd = &new_conversions[nconversions];
+ 	  convd->encoding = encoding;
+@@ -950,6 +986,7 @@ _nl_find_msg (domain_file, domainbinding
+ 			   translation at all.  */
+ 			if (__builtin_expect (r != __GCONV_NULCONV, 1))
+ 			  {
++			    __libc_rwlock_unlock (domain->conversions_lock);
+ 			    free ((char *) encoding);
+ 			    return NULL;
+ 			  }
+@@ -989,6 +1026,9 @@ _nl_find_msg (domain_file, domainbinding
+ 	  convd->conv_tab = NULL;
+ 	  /* Here domain->conversions is still == new_conversions.  */
+ 	  domain->nconversions++;
++
++	found_convd:
++	  __libc_rwlock_unlock (domain->conversions_lock);
+ 	}
+ 
+       if (
+@@ -1001,6 +1041,7 @@ _nl_find_msg (domain_file, domainbinding
+ # endif
+ 	  )
+ 	{
++	  __libc_lock_define_initialized (static, lock)
+ 	  /* We are supposed to do a conversion.  First allocate an
+ 	     appropriate table with the same structure as the table
+ 	     of translations in the file, where we can put the pointers
+@@ -1010,13 +1051,21 @@ _nl_find_msg (domain_file, domainbinding
+ 	     handle this case by converting RESULTLEN bytes, including
+ 	     NULs.  */
+ 
+-	  if (convd->conv_tab == NULL
+-	      && ((convd->conv_tab =
+-		    (char **) calloc (nstrings + domain->n_sysdep_strings,
+-				      sizeof (char *)))
+-		  == NULL))
+-	    /* Mark that we didn't succeed allocating a table.  */
+-	    convd->conv_tab = (char **) -1;
++	  if (__builtin_expect (convd->conv_tab == NULL, 0))
++	    {
++	      __libc_lock_lock (lock);
++	      if (convd->conv_tab == NULL)
++		{
++		  convd->conv_tab
++		    = calloc (nstrings + domain->n_sysdep_strings,
++			      sizeof (char *));
++		  if (convd->conv_tab != NULL)
++		    goto not_translated_yet;
++		  /* Mark that we didn't succeed allocating a table.  */
++		  convd->conv_tab = (char **) -1;
++		}
++	      __libc_lock_unlock (lock);
++	    }
+ 
+ 	  if (__builtin_expect (convd->conv_tab == (char **) -1, 0))
+ 	    /* Nothing we can do, no more memory.  We cannot use the
+@@ -1025,12 +1074,14 @@ _nl_find_msg (domain_file, domainbinding
+ 
+ 	  if (convd->conv_tab[act] == NULL)
+ 	    {
++	      __libc_lock_lock (lock);
++	    not_translated_yet:;
++
+ 	      /* We haven't used this string so far, so it is not
+ 		 translated yet.  Do this now.  */
+ 	      /* We use a bit more efficient memory handling.
+ 		 We allocate always larger blocks which get used over
+ 		 time.  This is faster than many small allocations.   */
+-	      __libc_lock_define_initialized (static, lock)
+ # define INITIAL_BLOCK_SIZE	4080
+ 	      static unsigned char *freemem;
+ 	      static size_t freemem_size;
+@@ -1042,8 +1093,6 @@ _nl_find_msg (domain_file, domainbinding
+ 	      transmem_block_t *transmem_list = NULL;
+ # endif
+ 
+-	      __libc_lock_lock (lock);
+-
+ 	      inbuf = (const unsigned char *) result;
+ 	      outbuf = freemem + sizeof (size_t);
+ 
+--- libc/intl/tst-gettext6.sh.jj	2008-04-09 09:29:11.000000000 +0200
++++ libc/intl/tst-gettext6.sh	2008-04-09 09:29:11.000000000 +0200
+@@ -0,0 +1,41 @@
++#! /bin/sh
++# Test that gettext() in multithreaded applications works correctly.
++# Copyright (C) 2008 Free Software Foundation, Inc.
++# This file is part of the GNU C Library.
++#
++
++# The GNU C Library is free software; you can redistribute it and/or
++# modify it under the terms of the GNU Lesser General Public
++# License as published by the Free Software Foundation; either
++# version 2.1 of the License, or (at your option) any later version.
++
++# The GNU C Library is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# Lesser General Public License for more details.
++
++# You should have received a copy of the GNU Lesser General Public
++# License along with the GNU C Library; if not, write to the Free
++# Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++# 02111-1307 USA.
++
++common_objpfx=$1
++run_program_prefix=$2
++objpfx=$3
++
++LC_ALL=C
++export LC_ALL
++
++# Create the domain directory.
++mkdir -p ${objpfx}domaindir/ja_JP/LC_MESSAGES
++# Populate it.
++msgfmt -o ${objpfx}domaindir/ja_JP/LC_MESSAGES/tstgettext6.mo ../po/ja.po
++
++GCONV_PATH=${common_objpfx}iconvdata
++export GCONV_PATH
++LOCPATH=${common_objpfx}localedata
++export LOCPATH
++
++${run_program_prefix} ${objpfx}tst-gettext6 > ${objpfx}tst-gettext6.out
++
++exit $?
+--- libc/intl/Makefile.jj	2005-05-04 19:53:42.000000000 +0200
++++ libc/intl/Makefile	2008-04-09 09:29:11.000000000 +0200
+@@ -32,11 +32,11 @@ distribute = gmo.h gettextP.h hash-strin
+ 	     tst-codeset.sh tstcodeset.po \
+ 	     tst-gettext3.sh \
+ 	     tst-gettext4.sh tst-gettext4-de.po tst-gettext4-fr.po \
+-	     tst-gettext5.sh
++	     tst-gettext5.sh tst-gettext6.sh
+ 
+ include ../Makeconfig
+ 
+-multithread-test-srcs := tst-gettext4 tst-gettext5
++multithread-test-srcs := tst-gettext4 tst-gettext5 tst-gettext6
+ test-srcs := tst-gettext tst-translit tst-gettext2 tst-codeset tst-gettext3
+ ifeq ($(have-thread-library),yes)
+ test-srcs += $(multithread-test-srcs)
+@@ -67,7 +67,8 @@ ifneq ($(strip $(MSGFMT)),:)
+ tests: $(objpfx)tst-translit.out $(objpfx)tst-gettext2.out \
+        $(objpfx)tst-codeset.out $(objpfx)tst-gettext3.out
+ ifeq ($(have-thread-library),yes)
+-tests: $(objpfx)tst-gettext4.out $(objpfx)tst-gettext5.out
++tests: $(objpfx)tst-gettext4.out $(objpfx)tst-gettext5.out \
++       $(objpfx)tst-gettext6.out
+ endif
+ ifneq (no,$(PERL))
+ tests: $(objpfx)mtrace-tst-gettext
+@@ -90,6 +91,8 @@ $(objpfx)tst-gettext4.out: tst-gettext4.
+ 	$(SHELL) -e $< $(common-objpfx) '$(run-program-prefix)' $(common-objpfx)intl/
+ $(objpfx)tst-gettext5.out: tst-gettext5.sh $(objpfx)tst-gettext5
+ 	$(SHELL) -e $< $(common-objpfx) '$(run-program-prefix)' $(common-objpfx)intl/
++$(objpfx)tst-gettext6.out: tst-gettext6.sh $(objpfx)tst-gettext6
++	$(SHELL) -e $< $(common-objpfx) '$(run-program-prefix)' $(common-objpfx)intl/
+ endif
+ endif
+ 
+@@ -104,6 +107,7 @@ CFLAGS-tst-codeset.c = -DOBJPFX=\"$(objp
+ CFLAGS-tst-gettext3.c = -DOBJPFX=\"$(objpfx)\"
+ CFLAGS-tst-gettext4.c = -DOBJPFX=\"$(objpfx)\"
+ CFLAGS-tst-gettext5.c = -DOBJPFX=\"$(objpfx)\"
++CFLAGS-tst-gettext6.c = -DOBJPFX=\"$(objpfx)\"
+ 
+ ifeq ($(have-thread-library),yes)
+ ifeq (yes,$(build-shared))
+@@ -122,6 +126,7 @@ $(objpfx)tst-codeset.out: $(objpfx)tst-g
+ $(objpfx)tst-gettext3.out: $(objpfx)tst-gettext.out
+ $(objpfx)tst-gettext4.out: $(objpfx)tst-gettext.out
+ $(objpfx)tst-gettext5.out: $(objpfx)tst-gettext.out
++$(objpfx)tst-gettext6.out: $(objpfx)tst-gettext.out
+ 
+ CPPFLAGS += -D'LOCALEDIR="$(msgcatdir)"' \
+ 	    -D'LOCALE_ALIAS_PATH="$(msgcatdir)"'
+--- libc/intl/loadmsgcat.c.jj	2005-04-05 00:33:01.000000000 +0200
++++ libc/intl/loadmsgcat.c	2008-04-09 09:29:02.000000000 +0200
+@@ -1252,6 +1252,7 @@ _nl_load_domain (domain_file, domainbind
+   /* No caches of converted translations so far.  */
+   domain->conversions = NULL;
+   domain->nconversions = 0;
++  __libc_rwlock_init (domain->conversions_lock);
+ 
+   /* Get the header entry and look for a plural specification.  */
+   nullentry = _nl_find_msg (domain_file, domainbinding, "", 0, &nullentrylen);
+@@ -1290,6 +1291,7 @@ _nl_unload_domain (domain)
+     }
+   if (domain->conversions != NULL)
+     free (domain->conversions);
++  __libc_rwlock_fini (domain->conversions_lock);
+ 
+   if (domain->malloced)
+     free (domain->malloced);
+--- libc/intl/tst-gettext6.c.jj	2008-04-09 09:29:11.000000000 +0200
++++ libc/intl/tst-gettext6.c	2008-04-09 09:29:11.000000000 +0200
+@@ -0,0 +1,86 @@
++/* Test that gettext() in multithreaded applications works correctly.
++   Copyright (C) 2008 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Jakub Jelinek <jakub@redhat.com>, 2008.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <libintl.h>
++#include <locale.h>
++#include <pthread.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/wait.h>
++#include <unistd.h>
++
++pthread_barrier_t b;
++
++static void *
++tf (void *arg)
++{
++  pthread_barrier_wait (&b);
++  return gettext ("Operation not permitted");
++}
++
++int
++test (void)
++{
++  pthread_t th[4];
++  unsetenv ("LANGUAGE");
++  unsetenv ("OUTPUT_CHARSET");
++  textdomain ("tstgettext6");
++  bindtextdomain ("tstgettext6", OBJPFX "domaindir");
++  setlocale (LC_ALL, "ja_JP.UTF-8");
++  pthread_barrier_init (&b, NULL, 4);
++  for (int i = 0; i < 4; i++)
++    if (pthread_create (&th[i], NULL, tf, NULL))
++      {
++	puts ("pthread_create failed");
++	return 1;
++      }
++  for (int i = 0; i < 4; i++)
++    pthread_join (th[i], NULL);
++  return 0;
++}
++
++int
++main (void)
++{
++  for (int i = 0; i < 300; i++)
++    {
++      pid_t p = fork ();
++      if (p == -1)
++	{
++	  printf ("fork failed: %m\n");
++	  return 1;
++	}
++      if (p == 0)
++	_exit (test ());
++      int status;
++      wait (&status);
++      if (WIFEXITED (status) && WEXITSTATUS (status) != 0)
++	{
++	  printf ("child exited with %d\n", WEXITSTATUS (status));
++	  return 1;
++	}
++      else if (WIFSIGNALED (status))
++	{
++	  printf ("child killed by signal %d\n", WTERMSIG (status));
++	  return 1;
++	}
++    }
++  return 0;
++}
+--- libc/locale/setlocale.c.jj	2006-05-15 20:29:34.000000000 +0200
++++ libc/locale/setlocale.c	2008-04-09 09:29:11.000000000 +0200
+@@ -123,7 +123,7 @@ static void (*const _nl_category_postloa
+ 
+ 
+ /* Lock for protecting global data.  */
+-__libc_lock_define_initialized (, __libc_setlocale_lock attribute_hidden)
++__libc_rwlock_define_initialized (, __libc_setlocale_lock attribute_hidden)
+ 
+ /* Defined in loadmsgcat.c.  */
+ extern int _nl_msg_cat_cntr;
+@@ -314,7 +314,7 @@ setlocale (int category, const char *loc
+ 	}
+ 
+       /* Protect global data.  */
+-      __libc_lock_lock (__libc_setlocale_lock);
++      __libc_rwlock_wrlock (__libc_setlocale_lock);
+ 
+       /* Load the new data for each category.  */
+       while (category-- > 0)
+@@ -381,7 +381,7 @@ setlocale (int category, const char *loc
+ 	    free ((char *) newnames[category]);
+ 
+       /* Critical section left.  */
+-      __libc_lock_unlock (__libc_setlocale_lock);
++      __libc_rwlock_unlock (__libc_setlocale_lock);
+ 
+       /* Free the resources (the locale path variable).  */
+       free (locale_path);
+@@ -394,7 +394,7 @@ setlocale (int category, const char *loc
+       const char *newname[1] = { locale };
+ 
+       /* Protect global data.  */
+-      __libc_lock_lock (__libc_setlocale_lock);
++      __libc_rwlock_wrlock (__libc_setlocale_lock);
+ 
+       if (CATEGORY_USED (category))
+ 	{
+@@ -446,7 +446,7 @@ setlocale (int category, const char *loc
+ 	}
+ 
+       /* Critical section left.  */
+-      __libc_lock_unlock (__libc_setlocale_lock);
++      __libc_rwlock_unlock (__libc_setlocale_lock);
+ 
+       /* Free the resources (the locale path variable.  */
+       free (locale_path);
+--- libc/locale/freelocale.c.jj	2005-12-21 08:27:27.000000000 +0100
++++ libc/locale/freelocale.c	2008-04-09 09:29:11.000000000 +0200
+@@ -26,7 +26,7 @@
+ 
+ 
+ /* Lock for protecting global data.  */
+-__libc_lock_define (extern , __libc_setlocale_lock attribute_hidden)
++__libc_rwlock_define (extern , __libc_setlocale_lock attribute_hidden)
+ 
+ 
+ void
+@@ -39,7 +39,7 @@ __freelocale (__locale_t dataset)
+     return;
+ 
+   /* We modify global data (the usage counts).  */
+-  __libc_lock_lock (__libc_setlocale_lock);
++  __libc_rwlock_wrlock (__libc_setlocale_lock);
+ 
+   for (cnt = 0; cnt < __LC_LAST; ++cnt)
+     if (cnt != LC_ALL && dataset->__locales[cnt]->usage_count != UNDELETABLE)
+@@ -47,7 +47,7 @@ __freelocale (__locale_t dataset)
+       _nl_remove_locale (cnt, dataset->__locales[cnt]);
+ 
+   /* It's done.  */
+-  __libc_lock_unlock (__libc_setlocale_lock);
++  __libc_rwlock_unlock (__libc_setlocale_lock);
+ 
+   /* Free the locale_t handle itself.  */
+   free (dataset);
+--- libc/locale/duplocale.c.jj	2005-12-21 08:27:27.000000000 +0100
++++ libc/locale/duplocale.c	2008-04-09 09:29:11.000000000 +0200
+@@ -27,7 +27,7 @@
+ 
+ 
+ /* Lock for protecting global data.  */
+-__libc_lock_define (extern , __libc_setlocale_lock attribute_hidden)
++__libc_rwlock_define (extern , __libc_setlocale_lock attribute_hidden)
+ 
+ 
+ __locale_t
+@@ -54,7 +54,7 @@ __duplocale (__locale_t dataset)
+       char *namep = (char *) (result + 1);
+ 
+       /* We modify global data (the usage counts).  */
+-      __libc_lock_lock (__libc_setlocale_lock);
++      __libc_rwlock_wrlock (__libc_setlocale_lock);
+ 
+       for (cnt = 0; cnt < __LC_LAST; ++cnt)
+ 	if (cnt != LC_ALL)
+@@ -78,7 +78,7 @@ __duplocale (__locale_t dataset)
+       result->__ctype_toupper = dataset->__ctype_toupper;
+ 
+       /* It's done.  */
+-      __libc_lock_unlock (__libc_setlocale_lock);
++      __libc_rwlock_unlock (__libc_setlocale_lock);
+     }
+ 
+   return result;
+--- libc/locale/newlocale.c.jj	2006-05-15 20:31:52.000000000 +0200
++++ libc/locale/newlocale.c	2008-04-09 09:29:11.000000000 +0200
+@@ -30,7 +30,7 @@
+ 
+ 
+ /* Lock for protecting global data.  */
+-__libc_lock_define (extern , __libc_setlocale_lock attribute_hidden)
++__libc_rwlock_define (extern , __libc_setlocale_lock attribute_hidden)
+ 
+ 
+ /* Use this when we come along an error.  */
+@@ -162,7 +162,7 @@ __newlocale (int category_mask, const ch
+     }
+ 
+   /* Protect global data.  */
+-  __libc_lock_lock (__libc_setlocale_lock);
++  __libc_rwlock_wrlock (__libc_setlocale_lock);
+ 
+   /* Now process all categories we are interested in.  */
+   names_len = 0;
+@@ -183,7 +183,7 @@ __newlocale (int category_mask, const ch
+ 		  _nl_remove_locale (cnt, result.__locales[cnt]);
+ 
+               /* Critical section left.  */
+-              __libc_lock_unlock (__libc_setlocale_lock);
++              __libc_rwlock_unlock (__libc_setlocale_lock);
+ 	      return NULL;
+ 	    }
+ 
+@@ -263,7 +263,7 @@ __newlocale (int category_mask, const ch
+     }
+ 
+   /* Critical section left.  */
+-  __libc_lock_unlock (__libc_setlocale_lock);
++  __libc_rwlock_unlock (__libc_setlocale_lock);
+ 
+   /* Update the special members.  */
+  update:
+--- libc/localedata/Makefile	2 Oct 2007 17:19:40 -0000	1.107
++++ libc/localedata/Makefile	30 Mar 2008 23:40:06 -0000	1.108
+@@ -133,7 +133,7 @@ LOCALES := de_DE.ISO-8859-1 de_DE.UTF-8 
+ 	   en_US.ISO-8859-1 ja_JP.EUC-JP da_DK.ISO-8859-1 \
+ 	   hr_HR.ISO-8859-2 sv_SE.ISO-8859-1 ja_JP.SJIS fr_FR.ISO-8859-1 \
+ 	   vi_VN.TCVN5712-1 nb_NO.ISO-8859-1 nn_NO.ISO-8859-1 \
+-	   tr_TR.UTF-8 cs_CZ.UTF-8 zh_TW.EUC-TW
++	   tr_TR.UTF-8 cs_CZ.UTF-8 zh_TW.EUC-TW ja_JP.UTF-8
+ LOCALE_SRCS := $(shell echo "$(LOCALES)"|sed 's/\([^ .]*\)[^ ]*/\1/g')
+ CHARMAPS := $(shell echo "$(LOCALES)" | \
+ 		    sed -e 's/[^ .]*[.]\([^ ]*\)/\1/g' -e s/SJIS/SHIFT_JIS/g)
+--- libc/nptl/sysdeps/pthread/bits/libc-lock.h	1 Aug 2007 04:20:52 -0000	1.22
++++ libc/nptl/sysdeps/pthread/bits/libc-lock.h	10 Oct 2007 15:59:42 -0000	1.23
+@@ -172,8 +172,15 @@ typedef pthread_key_t __libc_key_t;
+ # define __libc_lock_init(NAME) \
+   __libc_maybe_call (__pthread_mutex_init, (&(NAME), NULL), 0)
+ #endif
+-#define __libc_rwlock_init(NAME) \
++#if defined SHARED && !defined NOT_IN_libc
++/* ((NAME) = (__libc_rwlock_t) PTHREAD_RWLOCK_INITIALIZER, 0) is
++   inefficient.  */
++# define __libc_rwlock_init(NAME) \
++  (__builtin_memset (&(NAME), '\0', sizeof (NAME)), 0)
++#else
++# define __libc_rwlock_init(NAME) \
+   __libc_maybe_call (__pthread_rwlock_init, (&(NAME), NULL), 0)
++#endif
+ 
+ /* Same as last but this time we initialize a recursive mutex.  */
+ #if defined _LIBC && (!defined NOT_IN_libc || defined IS_IN_libpthread)
+@@ -214,8 +221,12 @@ typedef pthread_key_t __libc_key_t;
+ # define __libc_lock_fini(NAME) \
+   __libc_maybe_call (__pthread_mutex_destroy, (&(NAME)), 0)
+ #endif
+-#define __libc_rwlock_fini(NAME) \
++#if defined SHARED && !defined NOT_IN_libc
++# define __libc_rwlock_fini(NAME) ((void) 0)
++#else
++# define __libc_rwlock_fini(NAME) \
+   __libc_maybe_call (__pthread_rwlock_destroy, (&(NAME)), 0)
++#endif
+ 
+ /* Finalize recursive named lock.  */
+ #if defined _LIBC && (!defined NOT_IN_libc || defined IS_IN_libpthread)
+--- libc/nptl/tst-initializers1.c	27 May 2007 17:57:02 -0000	1.3
++++ libc/nptl/tst-initializers1.c	10 Oct 2007 15:59:52 -0000	1.4
+@@ -44,5 +44,12 @@ main (void)
+   if (rwl_writer.__data.__flags
+       != PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP)
+     return 1;
++  /* <bits/libc-lock.h> __libc_rwlock_init definition for libc.so
++     relies on PTHREAD_RWLOCK_INITIALIZER being all zeros.  If
++     that ever changes, <bits/libc-lock.h> needs updating.  */
++  size_t i;
++  for (i = 0; i < sizeof (rwl_normal); i++)
++    if (((char *) &rwl_normal)[i] != '\0')
++      return 1;
+   return 0;
+ }
+--- libc/time/era.c.jj	2002-08-29 01:10:59.000000000 +0200
++++ libc/time/era.c	2008-04-11 09:30:09.000000000 +0200
+@@ -1,5 +1,5 @@
+ /* Helper functions used by strftime/strptime to handle locale-specific "eras".
+-   Copyright (C) 1995-2001,02 Free Software Foundation, Inc.
++   Copyright (C) 1995-2002, 2008 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+ 
+    The GNU C Library is free software; you can redistribute it and/or
+@@ -24,7 +24,7 @@
+ #include <string.h>
+ 
+ /* Some of the functions here must not be used while setlocale is called.  */
+-__libc_lock_define (extern, __libc_setlocale_lock attribute_hidden)
++__libc_rwlock_define (extern, __libc_setlocale_lock attribute_hidden)
+ 
+ #define CURRENT(item)		(current->values[_NL_ITEM_INDEX (item)].string)
+ #define CURRENT_WORD(item)	(current->values[_NL_ITEM_INDEX (item)].word)
+@@ -45,7 +45,7 @@ _nl_init_era_entries (struct locale_data
+   if (CURRENT_WORD (_NL_TIME_ERA_NUM_ENTRIES) == 0)
+     return;
+ 
+-  __libc_lock_lock (__libc_setlocale_lock);
++  __libc_rwlock_wrlock (__libc_setlocale_lock);
+ 
+   if (current->private.time == NULL)
+     {
+@@ -135,7 +135,7 @@ _nl_init_era_entries (struct locale_data
+     }
+ 
+  out:
+-  __libc_lock_unlock (__libc_setlocale_lock);
++  __libc_rwlock_unlock (__libc_setlocale_lock);
+ }
+ 
+ struct era_entry *
+--- libc/time/alt_digit.c.jj	2002-08-29 01:10:59.000000000 +0200
++++ libc/time/alt_digit.c	2008-04-11 09:29:36.000000000 +0200
+@@ -1,5 +1,5 @@
+ /* Helper functions used by strftime/strptime to handle alternate digits.
+-   Copyright (C) 1995-2001,02 Free Software Foundation, Inc.
++   Copyright (C) 1995-2002, 2008 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+ 
+    The GNU C Library is free software; you can redistribute it and/or
+@@ -24,7 +24,7 @@
+ #include <string.h>
+ 
+ /* Some of the functions here must not be used while setlocale is called.  */
+-__libc_lock_define (extern, __libc_setlocale_lock attribute_hidden)
++__libc_rwlock_define (extern, __libc_setlocale_lock attribute_hidden)
+ 
+ #define CURRENT(item) (current->values[_NL_ITEM_INDEX (item)].string)
+ #define CURRENT_WSTR(item) \
+@@ -77,7 +77,7 @@ _nl_get_alt_digit (unsigned int number, 
+   if (number >= 100 || CURRENT (ALT_DIGITS)[0] == '\0')
+     return NULL;
+ 
+-  __libc_lock_lock (__libc_setlocale_lock);
++  __libc_rwlock_wrlock (__libc_setlocale_lock);
+ 
+   if (current->private.time == NULL
+       || ! current->private.time->alt_digits_initialized)
+@@ -88,7 +88,7 @@ _nl_get_alt_digit (unsigned int number, 
+ 	    ? current->private.time->alt_digits[number]
+ 	    : NULL);
+ 
+-  __libc_lock_unlock (__libc_setlocale_lock);
++  __libc_rwlock_unlock (__libc_setlocale_lock);
+ 
+   return result;
+ }
+@@ -104,7 +104,7 @@ _nl_get_walt_digit (unsigned int number,
+   if (number >= 100 || CURRENT_WSTR (_NL_WALT_DIGITS)[0] == L'\0')
+     return NULL;
+ 
+-  __libc_lock_lock (__libc_setlocale_lock);
++  __libc_rwlock_wrlock (__libc_setlocale_lock);
+ 
+   if (current->private.time == NULL)
+     {
+@@ -141,7 +141,7 @@ _nl_get_walt_digit (unsigned int number,
+     result = data->walt_digits[number];
+ 
+  out:
+-  __libc_lock_unlock (__libc_setlocale_lock);
++  __libc_rwlock_unlock (__libc_setlocale_lock);
+ 
+   return (wchar_t *) result;
+ }
+@@ -159,7 +159,7 @@ _nl_parse_alt_digit (const char **strp, 
+   if (CURRENT_WSTR (_NL_WALT_DIGITS)[0] == L'\0')
+     return result;
+ 
+-  __libc_lock_lock (__libc_setlocale_lock);
++  __libc_rwlock_wrlock (__libc_setlocale_lock);
+ 
+   if (current->private.time == NULL
+       || ! current->private.time->alt_digits_initialized)
+@@ -184,7 +184,7 @@ _nl_parse_alt_digit (const char **strp, 
+ 	  }
+       }
+ 
+-  __libc_lock_unlock (__libc_setlocale_lock);
++  __libc_rwlock_unlock (__libc_setlocale_lock);
+ 
+   if (result != -1)
+     *strp += maxlen;
+--- libc/wcsmbs/wcsmbsload.c.jj	2005-12-19 01:24:49.000000000 +0100
++++ libc/wcsmbs/wcsmbsload.c	2008-04-11 09:31:41.000000000 +0200
+@@ -1,4 +1,4 @@
+-/* Copyright (C) 1998-2002,2004,2005 Free Software Foundation, Inc.
++/* Copyright (C) 1998-2002,2004,2005,2008 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
+ 
+@@ -145,7 +145,7 @@ __wcsmbs_getfct (const char *to, const c
+ 
+ 
+ /* Some of the functions here must not be used while setlocale is called.  */
+-__libc_lock_define (extern, __libc_setlocale_lock attribute_hidden)
++__libc_rwlock_define (extern, __libc_setlocale_lock attribute_hidden)
+ 
+ /* Load conversion functions for the currently selected locale.  */
+ void
+@@ -153,7 +153,7 @@ internal_function
+ __wcsmbs_load_conv (struct locale_data *new_category)
+ {
+   /* Acquire the lock.  */
+-  __libc_lock_lock (__libc_setlocale_lock);
++  __libc_rwlock_wrlock (__libc_setlocale_lock);
+ 
+   /* We should repeat the test since while we waited some other thread
+      might have run this function.  */
+@@ -211,7 +211,7 @@ __wcsmbs_load_conv (struct locale_data *
+ 	}
+     }
+ 
+-  __libc_lock_unlock (__libc_setlocale_lock);
++  __libc_rwlock_unlock (__libc_setlocale_lock);
+ }
+ 
+ 

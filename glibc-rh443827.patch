@@ -1,0 +1,17 @@
+2007-08-03  Jakub Jelinek  <jakub@redhat.com>
+
+	* locales/translit_combining: Add U0141 and U0142.
+
+--- libc/localedata/locales/translit_combining	20 Apr 2002 07:12:59 -0000	1.3
++++ libc/localedata/locales/translit_combining	3 Aug 2007 15:41:17 -0000	1.4
+@@ -472,6 +472,10 @@ translit_start
+ <U013D> <U004C>
+ % LATIN SMALL LETTER L WITH CARON
+ <U013E> <U006C>
++% LATIN CAPITAL LETTER L WITH STROKE
++<U0141> <U004C>
++% LATIN SMALL LETTER L WITH STROKE
++<U0142> <U006C>
+ % LATIN CAPITAL LETTER N WITH ACUTE
+ <U0143> <U004E>
+ % LATIN SMALL LETTER N WITH ACUTE

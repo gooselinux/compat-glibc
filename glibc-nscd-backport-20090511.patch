@@ -1,0 +1,3639 @@
+--- libc/nscd/aicache.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/aicache.c	2009-05-11 05:14:09.000000000 -0400
+@@ -1,11 +1,12 @@
+ /* Cache handling for host lookup.
+-   Copyright (C) 2004, 2005, 2006 Free Software Foundation, Inc.
++   Copyright (C) 2004-2008, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Ulrich Drepper <drepper@redhat.com>, 2004.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -20,6 +21,7 @@
+ #include <errno.h>
+ #include <libintl.h>
+ #include <netdb.h>
++#include <nss.h>
+ #include <string.h>
+ #include <time.h>
+ #include <unistd.h>
+@@ -79,15 +81,6 @@ addhstaiX (struct database_dyn *db, int 
+ 	dbg_log (_("Reloading \"%s\" in hosts cache!"), (char *) key);
+     }
+ 
+-#if 0
+-  uid_t oldeuid = 0;
+-  if (db->secure)
+-    {
+-      oldeuid = geteuid ();
+-      pthread_seteuid_np (uid);
+-    }
+-#endif
+-
+   static service_user *hosts_database;
+   service_user *nip = NULL;
+   int no_more;
+@@ -118,7 +111,6 @@ addhstaiX (struct database_dyn *db, int 
+   char *tmpbuf6 = alloca (tmpbuf6len);
+   size_t tmpbuf4len = 0;
+   char *tmpbuf4 = NULL;
+-  char *canon = NULL;
+   int32_t ttl = INT32_MAX;
+   ssize_t total = 0;
+   char *key_copy = NULL;
+@@ -126,16 +118,24 @@ addhstaiX (struct database_dyn *db, int 
+ 
+   while (!no_more)
+     {
++      void *cp;
+       int status[2] = { NSS_STATUS_UNAVAIL, NSS_STATUS_UNAVAIL };
++      int naddrs = 0;
++      size_t addrslen = 0;
++      char *canon = NULL;
++      size_t canonlen;
+ 
+-      /* Prefer the function which also returns the TTL and canonical name.  */
+-      nss_gethostbyname3_r fct = __nss_lookup_function (nip,
+-							"gethostbyname3_r");
+-      if (fct == NULL)
+-	fct = __nss_lookup_function (nip, "gethostbyname2_r");
+-
+-      if (fct != NULL)
+ 	{
++	  /* Prefer the function which also returns the TTL and
++	     canonical name.  */
++	  nss_gethostbyname3_r fct = __nss_lookup_function (nip,
++							    "gethostbyname3_r");
++	  if (fct == NULL)
++	    fct = __nss_lookup_function (nip, "gethostbyname2_r");
++
++	  if (fct == NULL)
++	    goto next_nip;
++
+ 	  struct hostent th[2];
+ 
+ 	  /* Collect IPv6 information first.  */
+@@ -143,8 +143,8 @@ addhstaiX (struct database_dyn *db, int 
+ 	    {
+ 	      rc6 = 0;
+ 	      status[0] = DL_CALL_FCT (fct, (key, AF_INET6, &th[0], tmpbuf6,
+-					     tmpbuf6len, &rc6, &herrno,
+-					     &ttl, &canon));
++					     tmpbuf6len, &rc6, &herrno, &ttl,
++					     &canon));
+ 	      if (rc6 != ERANGE || herrno != NETDB_INTERNAL)
+ 		break;
+ 	      tmpbuf6 = extend_alloca (tmpbuf6, tmpbuf6len, 2 * tmpbuf6len);
+@@ -166,7 +166,7 @@ addhstaiX (struct database_dyn *db, int 
+ 	      tmpbuf4 = tmpbuf6;
+ 	    }
+ 
+-	  /* Next collect IPv4 information first.  */
++	  /* Next collect IPv4 information.  */
+ 	  while (1)
+ 	    {
+ 	      rc4 = 0;
+@@ -179,222 +179,224 @@ addhstaiX (struct database_dyn *db, int 
+ 	      tmpbuf4 = extend_alloca (tmpbuf4, tmpbuf4len, 2 * tmpbuf4len);
+ 	    }
+ 
+-	  if (rc4 != 0 || herrno == NETDB_INTERNAL)
++	  if (rc4 != 0 && herrno == NETDB_INTERNAL)
+ 	    goto out;
+ 
+-	  if (status[0] == NSS_STATUS_SUCCESS
+-	      || status[1] == NSS_STATUS_SUCCESS)
++	  if (status[0] != NSS_STATUS_SUCCESS
++	      && status[1] != NSS_STATUS_SUCCESS)
++	    goto next_nip;
++
++	  /* We found the data.  Count the addresses and the size.  */
++	  for (int j = 0; j < 2; ++j)
++	    if (status[j] == NSS_STATUS_SUCCESS)
++	      for (int i = 0; th[j].h_addr_list[i] != NULL; ++i)
++		{
++		  ++naddrs;
++		  addrslen += th[j].h_length;
++		}
++
++	  if (canon == NULL)
+ 	    {
+-	      /* We found the data.  Count the addresses and the size.  */
+-	      int naddrs = 0;
+-	      size_t addrslen = 0;
+-	      for (int j = 0; j < 2; ++j)
+-		if (status[j] == NSS_STATUS_SUCCESS)
+-		  for (int i = 0; th[j].h_addr_list[i] != NULL; ++i)
++	      /* Determine the canonical name.  */
++	      nss_getcanonname_r cfct;
++	      cfct = __nss_lookup_function (nip, "getcanonname_r");
++	      if (cfct != NULL)
++		{
++		  const size_t max_fqdn_len = 256;
++		  char *buf = alloca (max_fqdn_len);
++		  char *s;
++		  int rc;
++
++		  if (DL_CALL_FCT (cfct, (key, buf, max_fqdn_len, &s,
++					  &rc, &herrno))
++		      == NSS_STATUS_SUCCESS)
++		    canon = s;
++		  else
++		    /* Set to name now to avoid using gethostbyaddr.  */
++		    canon = key;
++		}
++	      else
++		{
++		  struct hostent *hstent = NULL;
++		  int herrno;
++		  struct hostent hstent_mem;
++		  void *addr;
++		  size_t addrlen;
++		  int addrfamily;
++
++		  if (status[1] == NSS_STATUS_SUCCESS)
++		    {
++		      addr = th[1].h_addr_list[0];
++		      addrlen = sizeof (struct in_addr);
++		      addrfamily = AF_INET;
++		    }
++		  else
+ 		    {
+-		      ++naddrs;
+-		      addrslen += th[j].h_length;
++		      addr = th[0].h_addr_list[0];
++		      addrlen = sizeof (struct in6_addr);
++		      addrfamily = AF_INET6;
+ 		    }
+ 
+-	      if (canon == NULL)
+-		{
+-		  /* Determine the canonical name.  */
+-		  nss_getcanonname_r cfct;
+-		  cfct = __nss_lookup_function (nip, "getcanonname_r");
+-		  if (cfct != NULL)
++		  size_t tmpbuflen = 512;
++		  char *tmpbuf = alloca (tmpbuflen);
++		  int rc;
++		  while (1)
+ 		    {
+-		      const size_t max_fqdn_len = 256;
+-		      char *buf = alloca (max_fqdn_len);
+-		      char *s;
+-		      int rc;
+-
+-		      if (DL_CALL_FCT (cfct, (key, buf, max_fqdn_len, &s, &rc,
+-					      &herrno)) == NSS_STATUS_SUCCESS)
+-			canon = s;
+-		      else
+-			/* Set to name now to avoid using gethostbyaddr.  */
+-			canon = key;
++		      rc = __gethostbyaddr2_r (addr, addrlen, addrfamily,
++					       &hstent_mem, tmpbuf, tmpbuflen,
++					       &hstent, &herrno, NULL);
++		      if (rc != ERANGE || herrno != NETDB_INTERNAL)
++			break;
++		      tmpbuf = extend_alloca (tmpbuf, tmpbuflen,
++					      tmpbuflen * 2);
+ 		    }
+-		  else
++
++		  if (rc == 0)
+ 		    {
+-		      struct hostent *hstent = NULL;
+-		      int herrno;
+-		      struct hostent hstent_mem;
+-		      void *addr;
+-		      size_t addrlen;
+-		      int addrfamily;
+-
+-		      if (status[1] == NSS_STATUS_SUCCESS)
+-			{
+-			  addr = th[1].h_addr_list[0];
+-			  addrlen = sizeof (struct in_addr);
+-			  addrfamily = AF_INET;
+-			}
++		      if (hstent != NULL)
++			canon = hstent->h_name;
+ 		      else
+-			{
+-			  addr = th[0].h_addr_list[0];
+-			  addrlen = sizeof (struct in6_addr);
+-			  addrfamily = AF_INET6;
+-			}
+-
+-		      size_t tmpbuflen = 512;
+-		      char *tmpbuf = alloca (tmpbuflen);
+-		      int rc;
+-		      while (1)
+-			{
+-			  rc = __gethostbyaddr2_r (addr, addrlen, addrfamily,
+-						   &hstent_mem, tmpbuf, tmpbuflen,
+-						   &hstent, &herrno, NULL);
+-			  if (rc != ERANGE || herrno != NETDB_INTERNAL)
+-			    break;
+-			  tmpbuf = extend_alloca (tmpbuf, tmpbuflen,
+-						  tmpbuflen * 2);
+-			}
+-
+-		      if (rc == 0)
+-			{
+-			  if (hstent != NULL)
+-			    canon = hstent->h_name;
+-			  else
+-			    canon = key;
+-			}
++			canon = key;
+ 		    }
+ 		}
+-	      size_t canonlen = canon == NULL ? 0 : (strlen (canon) + 1);
++	    }
+ 
+-	      total = sizeof (*dataset) + naddrs + addrslen + canonlen;
++	  canonlen = canon == NULL ? 0 : (strlen (canon) + 1);
+ 
+-	      /* Now we can allocate the data structure.  */
+-	      if (he == NULL)
+-		dataset = (struct dataset *) mempool_alloc (db, total
+-							    + req->key_len, 1);
++	  total = sizeof (*dataset) + naddrs + addrslen + canonlen;
+ 
+-	      if (dataset == NULL)
+-		{
+-		  /* We cannot permanently add the result in the moment.  But
+-		     we can provide the result as is.  Store the data in some
+-		     temporary memory.  */
+-		  dataset = (struct dataset *) alloca (total + req->key_len);
+ 
+-		  /* We cannot add this record to the permanent database.  */
+-		  alloca_used = true;
+-		}
++	  /* Now we can allocate the data structure.  If the TTL of the
++	     entry is reported as zero do not cache the entry at all.  */
++	  if (ttl != 0 && he == NULL)
++	    dataset = (struct dataset *) mempool_alloc (db, total
++							+ req->key_len, 1);
+ 
+-	      dataset->head.allocsize = total + req->key_len;
+-	      dataset->head.recsize = total - offsetof (struct dataset, resp);
+-	      dataset->head.notfound = false;
+-	      dataset->head.nreloads = he == NULL ? 0 : (dh->nreloads + 1);
+-	      dataset->head.usable = true;
+-
+-	      /* Compute the timeout time.  */
+-	      dataset->head.timeout = time (NULL) + (ttl == INT32_MAX
+-						     ? db->postimeout : ttl);
+-
+-	      dataset->resp.version = NSCD_VERSION;
+-	      dataset->resp.found = 1;
+-	      dataset->resp.naddrs = naddrs;
+-	      dataset->resp.addrslen = addrslen;
+-	      dataset->resp.canonlen = canonlen;
+-	      dataset->resp.error = NETDB_SUCCESS;
+-
+-	      char *addrs = (char *) (&dataset->resp + 1);
+-	      uint8_t *family = (uint8_t *) (addrs + addrslen);
+-
+-	      for (int j = 0; j < 2; ++j)
+-		if (status[j] == NSS_STATUS_SUCCESS)
+-		  for (int i = 0; th[j].h_addr_list[i] != NULL; ++i)
+-		    {
+-		      addrs = mempcpy (addrs, th[j].h_addr_list[i],
+-				       th[j].h_length);
+-		      *family++ = th[j].h_addrtype;
+-		    }
++	  if (dataset == NULL)
++	    {
++	      /* We cannot permanently add the result in the moment.  But
++		 we can provide the result as is.  Store the data in some
++		 temporary memory.  */
++	      dataset = (struct dataset *) alloca (total + req->key_len);
++
++	      /* We cannot add this record to the permanent database.  */
++	      alloca_used = true;
++	    }
+ 
+-	      void *cp = family;
+-	      if (canon != NULL)
+-		cp = mempcpy (cp, canon, canonlen);
+-
+-	      key_copy = memcpy (cp, key, req->key_len);
+-
+-	      /* Now we can determine whether on refill we have to
+-		 create a new record or not.  */
+-	      if (he != NULL)
++	  /* Fill in the address and address families.  */
++	  char *addrs = dataset->strdata;
++	  uint8_t *family = (uint8_t *) (addrs + addrslen);
++
++	  for (int j = 0; j < 2; ++j)
++	    if (status[j] == NSS_STATUS_SUCCESS)
++	      for (int i = 0; th[j].h_addr_list[i] != NULL; ++i)
+ 		{
+-		  assert (fd == -1);
++		  addrs = mempcpy (addrs, th[j].h_addr_list[i],
++				   th[j].h_length);
++		  *family++ = th[j].h_addrtype;
++		}
+ 
+-		  if (total + req->key_len == dh->allocsize
+-		      && total - offsetof (struct dataset, resp) == dh->recsize
+-		      && memcmp (&dataset->resp, dh->data,
+-				 dh->allocsize
+-				 - offsetof (struct dataset, resp)) == 0)
+-		    {
+-		      /* The data has not changed.  We will just bump the
+-			 timeout value.  Note that the new record has been
+-			 allocated on the stack and need not be freed.  */
+-		      dh->timeout = dataset->head.timeout;
+-		      ++dh->nreloads;
+-		    }
+-		  else
+-		    {
+-		      /* We have to create a new record.  Just allocate
+-			 appropriate memory and copy it.  */
+-		      struct dataset *newp
+-			= (struct dataset *) mempool_alloc (db, total
+-							    + req->key_len, 1);
+-		      if (newp != NULL)
+-			{
+-			  /* Adjust pointer into the memory block.  */
+-			  key_copy = (char *) newp + (key_copy
+-						      - (char *) dataset);
+-
+-			  dataset = memcpy (newp, dataset,
+-					    total + req->key_len);
+-			  alloca_used = false;
+-			}
++	  cp = family;
++	}
+ 
+-		      /* Mark the old record as obsolete.  */
+-		      dh->usable = false;
+-		    }
+-		}
+-	      else
++      /* Fill in the rest of the dataset.  */
++      dataset->head.allocsize = total + req->key_len;
++      dataset->head.recsize = total - offsetof (struct dataset, resp);
++      dataset->head.notfound = false;
++      dataset->head.nreloads = he == NULL ? 0 : (dh->nreloads + 1);
++      dataset->head.usable = true;
++
++      /* Compute the timeout time.  */
++      dataset->head.timeout = time (NULL) + (ttl == INT32_MAX
++					     ? db->postimeout : ttl);
++
++      dataset->resp.version = NSCD_VERSION;
++      dataset->resp.found = 1;
++      dataset->resp.naddrs = naddrs;
++      dataset->resp.addrslen = addrslen;
++      dataset->resp.canonlen = canonlen;
++      dataset->resp.error = NETDB_SUCCESS;
++
++      if (canon != NULL)
++	cp = mempcpy (cp, canon, canonlen);
++
++      key_copy = memcpy (cp, key, req->key_len);
++
++      assert (cp == (char *) dataset + total);
++
++      /* Now we can determine whether on refill we have to create a
++	 new record or not.  */
++      if (he != NULL)
++	{
++	  assert (fd == -1);
++
++	  if (total + req->key_len == dh->allocsize
++	      && total - offsetof (struct dataset, resp) == dh->recsize
++	      && memcmp (&dataset->resp, dh->data,
++			 dh->allocsize - offsetof (struct dataset,
++						   resp)) == 0)
++	    {
++	      /* The data has not changed.  We will just bump the
++		 timeout value.  Note that the new record has been
++		 allocated on the stack and need not be freed.  */
++	      dh->timeout = dataset->head.timeout;
++	      ++dh->nreloads;
++	    }
++	  else
++	    {
++	      /* We have to create a new record.  Just allocate
++		 appropriate memory and copy it.  */
++	      struct dataset *newp
++		= (struct dataset *) mempool_alloc (db, total + req->key_len,
++						    1);
++	      if (__builtin_expect (newp != NULL, 1))
+ 		{
+-		  /* We write the dataset before inserting it to the
+-		     database since while inserting this thread might
+-		     block and so would unnecessarily let the receiver
+-		     wait.  */
+-		  assert (fd != -1);
++		  /* Adjust pointer into the memory block.  */
++		  key_copy = (char *) newp + (key_copy - (char *) dataset);
++
++		  dataset = memcpy (newp, dataset, total + req->key_len);
++		  alloca_used = false;
++		}
++
++	      /* Mark the old record as obsolete.  */
++	      dh->usable = false;
++	    }
++	}
++      else
++	{
++	  /* We write the dataset before inserting it to the database
++	     since while inserting this thread might block and so
++	     would unnecessarily let the receiver wait.  */
++	  assert (fd != -1);
+ 
+ #ifdef HAVE_SENDFILE
+-		  if (__builtin_expect (db->mmap_used, 1) && !alloca_used)
+-		    {
+-		      assert (db->wr_fd != -1);
+-		      assert ((char *) &dataset->resp > (char *) db->data);
+-		      assert ((char *) &dataset->resp - (char *) db->head
+-			      + total
+-			      <= (sizeof (struct database_pers_head)
+-				  + db->head->module * sizeof (ref_t)
+-				  + db->head->data_size));
+-		      ssize_t written;
+-		      written = sendfileall (fd, db->wr_fd,
+-					     (char *) &dataset->resp
+-					     - (char *) db->head, total);
++	  if (__builtin_expect (db->mmap_used, 1) && !alloca_used)
++	    {
++	      assert (db->wr_fd != -1);
++	      assert ((char *) &dataset->resp > (char *) db->data);
++	      assert ((char *) &dataset->resp - (char *) db->head + total
++		      <= (sizeof (struct database_pers_head)
++			  + db->head->module * sizeof (ref_t)
++			  + db->head->data_size));
++	      ssize_t written;
++	      written = sendfileall (fd, db->wr_fd, (char *) &dataset->resp
++				     - (char *) db->head, total);
+ # ifndef __ASSUME_SENDFILE
+-		      if (written == -1 && errno == ENOSYS)
+-			goto use_write;
++	      if (written == -1 && errno == ENOSYS)
++		goto use_write;
+ # endif
+-		    }
+-		  else
++	    }
++	  else
+ # ifndef __ASSUME_SENDFILE
+-		  use_write:
++	  use_write:
+ # endif
+ #endif
+-		    writeall (fd, &dataset->resp, total);
+-		}
+-
+-	      goto out;
+-	    }
+-
++	    writeall (fd, &dataset->resp, total);
+ 	}
+ 
++      goto out;
++
++next_nip:
+       if (nss_next_action (nip, status[1]) == NSS_ACTION_RETURN)
+ 	break;
+ 
+@@ -447,11 +449,6 @@ addhstaiX (struct database_dyn *db, int 
+  out:
+   _res.options = old_res_options;
+ 
+-#if 0
+-  if (db->secure)
+-    pthread_seteuid_np (oldeuid);
+-#endif
+-
+   if (dataset != NULL && !alloca_used)
+     {
+       /* If necessary, we also propagate the data to disk.  */
+@@ -465,7 +462,7 @@ addhstaiX (struct database_dyn *db, int 
+ 	}
+ 
+       (void) cache_add (req->type, key_copy, req->key_len, &dataset->head,
+-			true, db, uid);
++			true, db, uid, he == NULL);
+ 
+       pthread_rwlock_unlock (&db->lock);
+ 
+--- libc/nscd/cache.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/cache.c	2009-05-11 05:04:15.000000000 -0400
+@@ -1,10 +1,11 @@
+-/* Copyright (c) 1998, 1999, 2003-2005, 2006 Free Software Foundation, Inc.
++/* Copyright (c) 1998, 1999, 2003-2008, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -44,6 +45,23 @@ extern void *xcalloc (size_t n, size_t s
+ unsigned int reload_count = DEFAULT_RELOAD_LIMIT;
+ 
+ 
++static void (*const readdfcts[LASTREQ]) (struct database_dyn *,
++					 struct hashentry *,
++					 struct datahead *) =
++{
++  [GETPWBYNAME] = readdpwbyname,
++  [GETPWBYUID] = readdpwbyuid,
++  [GETGRBYNAME] = readdgrbyname,
++  [GETGRBYGID] = readdgrbygid,
++  [GETHOSTBYNAME] = readdhstbyname,
++  [GETHOSTBYNAMEv6] = readdhstbynamev6,
++  [GETHOSTBYADDR] = readdhstbyaddr,
++  [GETHOSTBYADDRv6] = readdhstbyaddrv6,
++  [GETAI] = readdhstai,
++  [INITGROUPS] = readdinitgroups
++};
++
++
+ /* Search the cache for a matching entry and return it when found.  If
+    this fails search the negative cache and return (void *) -1 if this
+    search was successful.  Otherwise return NULL.
+@@ -115,7 +133,7 @@ cache_search (request_type type, void *k
+ int
+ cache_add (int type, const void *key, size_t len, struct datahead *packet,
+ 	   bool first, struct database_dyn *table,
+-	   uid_t owner)
++	   uid_t owner, bool prune_wakeup)
+ {
+   if (__builtin_expect (debug_level >= 2, 0))
+     {
+@@ -129,7 +147,7 @@ cache_add (int type, const void *key, si
+ 
+       dbg_log (_("add new entry \"%s\" of type %s for %s to cache%s"),
+ 	       str, serv2str[type], dbnames[table - dbs],
+-	       first ? " (first)" : "");
++	       first ? _(" (first)") : "");
+     }
+ 
+   unsigned long int hash = __nis_hash (key, len) % table->head->module;
+@@ -138,11 +156,12 @@ cache_add (int type, const void *key, si
+   newp = mempool_alloc (table, sizeof (struct hashentry), 0);
+   /* If we cannot allocate memory, just do not do anything.  */
+   if (newp == NULL)
+-    {  
++    {
+       /* If necessary mark the entry as unusable so that lookups will
+ 	 not use it.  */
+       if (first)
+ 	packet->usable = false;
++
+       return -1;
+     }
+ 
+@@ -153,6 +172,7 @@ cache_add (int type, const void *key, si
+   assert (newp->key + newp->len <= table->head->first_free);
+   newp->owner = owner;
+   newp->packet = (char *) packet - table->data;
++  assert ((newp->packet & BLOCK_ALIGN_M1) == 0);
+ 
+   /* Put the new entry in the first position.  */
+   do
+@@ -184,6 +204,28 @@ cache_add (int type, const void *key, si
+ 	   (char *) &table->head->array[hash] - (char *) table->head
+ 	   + sizeof (ref_t), MS_ASYNC);
+ 
++  /* We do not have to worry about the pruning thread if we are
++     re-adding the data since this is done by the pruning thread.  We
++     also do not have to do anything in case this is not the first
++     time the data is entered since different data heads all have the
++     same timeout.  */
++  if (first && prune_wakeup)
++    {
++      /* Perhaps the prune thread for the table is not running in a long
++	 time.  Wake it if necessary.  */
++      pthread_mutex_lock (&table->prune_lock);
++      time_t next_wakeup = table->wakeup_time;
++      bool do_wakeup = false;
++      if (next_wakeup > packet->timeout + CACHE_PRUNE_INTERVAL)
++	{
++	  table->wakeup_time = packet->timeout;
++	  do_wakeup = true;
++	}
++      pthread_mutex_unlock (&table->prune_lock);
++      if (do_wakeup)
++	pthread_cond_signal (&table->prune_cond);
++    }
++
+   return 0;
+ }
+ 
+@@ -199,7 +241,7 @@ cache_add (int type, const void *key, si
+    actually remove them.  This is complicated by the way we have to
+    free the data structures since some hash table entries share the same
+    data.  */
+-void
++time_t
+ prune_cache (struct database_dyn *table, time_t now, int fd)
+ {
+   size_t cnt = table->head->module;
+@@ -213,25 +255,14 @@ prune_cache (struct database_dyn *table,
+ 	  int32_t resp = 0;
+ 	  writeall (fd, &resp, sizeof (resp));
+ 	}
+-      return;
+-    }
+ 
+-  /* This function can be called from the cleanup thread but also in
+-     response to an invalidate command.  Make sure only one thread is
+-     running.  When not serving INVALIDATE request, no need for the
+-     second to wait around.  */
+-  if (fd == -1)
+-    {
+-      if (pthread_mutex_trylock (&table->prunelock) != 0)
+-	/* The work is already being done.  */
+-	return;
++      /* No need to do this again anytime soon.  */
++      return 24 * 60 * 60;
+     }
+-  else
+-    pthread_mutex_lock (&table->prunelock);
+ 
+   /* If we check for the modification of the underlying file we invalidate
+      the entries also in this case.  */
+-  if (table->check_file)
++  if (table->inotify_descr < 0 && table->check_file && now != LONG_MAX)
+     {
+       struct stat64 st;
+ 
+@@ -285,6 +316,8 @@ prune_cache (struct database_dyn *table,
+     dbg_log (_("pruning %s cache; time %ld"),
+ 	     dbnames[table - dbs], (long int) now);
+ 
++#define NO_TIMEOUT LONG_MAX
++  time_t next_timeout = NO_TIMEOUT;
+   do
+     {
+       ref_t run = table->head->array[--cnt];
+@@ -351,51 +384,10 @@ prune_cache (struct database_dyn *table,
+ 		      /* Reload the value.  We do this only for the
+ 			 initially used key, not the additionally
+ 			 added derived value.  */
+-		      switch (runp->type)
+-			{
+-			case GETPWBYNAME:
+-			  readdpwbyname (table, runp, dh);
+-			  break;
+-
+-			case GETPWBYUID:
+-			  readdpwbyuid (table, runp, dh);
+-			  break;
+-
+-			case GETGRBYNAME:
+-			  readdgrbyname (table, runp, dh);
+-			  break;
+-
+-			case GETGRBYGID:
+-			  readdgrbygid (table, runp, dh);
+-			  break;
+-
+-			case GETHOSTBYNAME:
+-			  readdhstbyname (table, runp, dh);
+-			  break;
+-
+-			case GETHOSTBYNAMEv6:
+-			  readdhstbynamev6 (table, runp, dh);
+-			  break;
+-
+-			case GETHOSTBYADDR:
+-			  readdhstbyaddr (table, runp, dh);
+-			  break;
+-
+-			case GETHOSTBYADDRv6:
+-			  readdhstbyaddrv6 (table, runp, dh);
+-			  break;
+-
+-			case GETAI:
+-			  readdhstai (table, runp, dh);
+-			  break;
+-
+-			case INITGROUPS:
+-			  readdinitgroups (table, runp, dh);
+-			  break;
+-
+-			default:
+-			  assert (! "should never happen");
+-			}
++		      assert (runp->type < LASTREQ
++			      && readdfcts[runp->type] != NULL);
++
++		      readdfcts[runp->type] (table, runp, dh);
+ 
+ 		      /* If the entry has been replaced, we might need
+ 			 cleanup.  */
+@@ -404,14 +396,17 @@ prune_cache (struct database_dyn *table,
+ 		}
+ 	    }
+ 	  else
+-	    assert (dh->usable);
++	    {
++	      assert (dh->usable);
++	      next_timeout = MIN (next_timeout, dh->timeout);
++	    }
+ 
+ 	  run = runp->next;
+ 	}
+     }
+   while (cnt > 0);
+ 
+-  if (fd != -1)
++  if (__builtin_expect (fd != -1, 0))
+     {
+       /* Reply to the INVALIDATE initiator that the cache has been
+ 	 invalidated.  */
+@@ -438,7 +433,8 @@ prune_cache (struct database_dyn *table,
+ 	      ref_t *old = &table->head->array[first];
+ 	      ref_t run = table->head->array[first];
+ 
+-	      while (run != ENDREF)
++	      assert (run != ENDREF);
++	      do
+ 		{
+ 		  struct hashentry *runp = (struct hashentry *) (data + run);
+ 		  struct datahead *dh
+@@ -464,6 +460,7 @@ prune_cache (struct database_dyn *table,
+ 		      run = runp->next;
+ 		    }
+ 		}
++	      while (run != ENDREF);
+ 	    }
+ 
+ 	  ++first;
+@@ -511,5 +508,7 @@ prune_cache (struct database_dyn *table,
+   if (any)
+     gc (table);
+ 
+-  pthread_mutex_unlock (&table->prunelock);
++  /* If there is no entry in the database and we therefore have no new
++     timeout value, tell the caller to wake up in 24 hours.  */
++  return next_timeout == NO_TIMEOUT ? 24 * 60 * 60 : next_timeout - now;
+ }
+--- libc/nscd/connections.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/connections.c	2009-05-11 06:57:37.000000000 -0400
+@@ -1,11 +1,12 @@
+ /* Inner loops of cache daemon.
+-   Copyright (C) 1998-2003, 2004, 2005, 2006 Free Software Foundation, Inc.
++   Copyright (C) 1998-2007, 2008, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -34,6 +35,9 @@
+ #ifdef HAVE_EPOLL
+ # include <sys/epoll.h>
+ #endif
++#ifdef HAVE_INOTIFY
++# include <sys/inotify.h>
++#endif
+ #include <sys/mman.h>
+ #include <sys/param.h>
+ #include <sys/poll.h>
+@@ -47,6 +51,7 @@
+ #include "nscd.h"
+ #include "dbg_log.h"
+ #include "selinux.h"
++#include <resolv/resolv.h>
+ #ifdef HAVE_SENDFILE
+ # include <kernel-features.h>
+ #endif
+@@ -70,13 +75,28 @@ static gid_t *server_groups;
+ static int server_ngroups;
+ static volatile int sighup_pending;
+ 
++static void __attribute__((noinline))
++handle_sighup_pending (void)
++{
++  int db;
++  sighup_pending = 0;
++  for (db = pwddb; db < lastdb; db++)
++    if (dbs[db].enabled)
++      {
++	pthread_mutex_lock (&dbs[db].prune_lock);
++	dbs[db].clear_cache = 1;
++	pthread_mutex_unlock (&dbs[db].prune_lock);
++	pthread_cond_signal (&dbs[db].prune_cond);
++      }
++}
++
+ static pthread_attr_t attr;
+ 
+ static void begin_drop_privileges (void);
+ static void finish_drop_privileges (void);
+ 
+ /* Map request type to a string.  */
+-const char *serv2str[LASTREQ] =
++const char *const serv2str[LASTREQ] =
+ {
+   [GETPWBYNAME] = "GETPWBYNAME",
+   [GETPWBYUID] = "GETPWBYUID",
+@@ -101,7 +121,8 @@ struct database_dyn dbs[lastdb] =
+ {
+   [pwddb] = {
+     .lock = PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP,
+-    .prunelock = PTHREAD_MUTEX_INITIALIZER,
++    .prune_lock = PTHREAD_MUTEX_INITIALIZER,
++    .prune_run_lock = PTHREAD_MUTEX_INITIALIZER,
+     .enabled = 0,
+     .check_file = 1,
+     .persistent = 0,
+@@ -109,6 +130,7 @@ struct database_dyn dbs[lastdb] =
+     .shared = 0,
+     .max_db_size = DEFAULT_MAX_DB_SIZE,
+     .suggested_module = DEFAULT_SUGGESTED_MODULE,
++   .reset_res = 0,
+     .filename = "/etc/passwd",
+     .db_filename = _PATH_NSCD_PASSWD_DB,
+     .disabled_iov = &pwd_iov_disabled,
+@@ -120,7 +142,8 @@ struct database_dyn dbs[lastdb] =
+   },
+   [grpdb] = {
+     .lock = PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP,
+-    .prunelock = PTHREAD_MUTEX_INITIALIZER,
++    .prune_lock = PTHREAD_MUTEX_INITIALIZER,
++    .prune_run_lock = PTHREAD_MUTEX_INITIALIZER,
+     .enabled = 0,
+     .check_file = 1,
+     .persistent = 0,
+@@ -128,6 +151,7 @@ struct database_dyn dbs[lastdb] =
+     .shared = 0,
+     .max_db_size = DEFAULT_MAX_DB_SIZE,
+     .suggested_module = DEFAULT_SUGGESTED_MODULE,
++    .reset_res = 0,
+     .filename = "/etc/group",
+     .db_filename = _PATH_NSCD_GROUP_DB,
+     .disabled_iov = &grp_iov_disabled,
+@@ -139,7 +163,8 @@ struct database_dyn dbs[lastdb] =
+   },
+   [hstdb] = {
+     .lock = PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP,
+-    .prunelock = PTHREAD_MUTEX_INITIALIZER,
++    .prune_lock = PTHREAD_MUTEX_INITIALIZER,
++    .prune_run_lock = PTHREAD_MUTEX_INITIALIZER,
+     .enabled = 0,
+     .check_file = 1,
+     .persistent = 0,
+@@ -147,6 +172,7 @@ struct database_dyn dbs[lastdb] =
+     .shared = 0,
+     .max_db_size = DEFAULT_MAX_DB_SIZE,
+     .suggested_module = DEFAULT_SUGGESTED_MODULE,
++    .reset_res = 1,
+     .filename = "/etc/hosts",
+     .db_filename = _PATH_NSCD_HOSTS_DB,
+     .disabled_iov = &hst_iov_disabled,
+@@ -160,28 +186,31 @@ struct database_dyn dbs[lastdb] =
+ 
+ 
+ /* Mapping of request type to database.  */
+-static struct database_dyn *const serv2db[LASTREQ] =
++static struct
+ {
+-  [GETPWBYNAME] = &dbs[pwddb],
+-  [GETPWBYUID] = &dbs[pwddb],
+-  [GETGRBYNAME] = &dbs[grpdb],
+-  [GETGRBYGID] = &dbs[grpdb],
+-  [GETHOSTBYNAME] = &dbs[hstdb],
+-  [GETHOSTBYNAMEv6] = &dbs[hstdb],
+-  [GETHOSTBYADDR] = &dbs[hstdb],
+-  [GETHOSTBYADDRv6] = &dbs[hstdb],
+-  [GETFDPW] = &dbs[pwddb],
+-  [GETFDGR] = &dbs[grpdb],
+-  [GETFDHST] = &dbs[hstdb],
+-  [GETAI] = &dbs[hstdb],
+-  [INITGROUPS] = &dbs[grpdb]
++  bool data_request;
++  struct database_dyn *db;
++} const reqinfo[LASTREQ] =
++{
++  [GETPWBYNAME] = { true, &dbs[pwddb] },
++  [GETPWBYUID] = { true, &dbs[pwddb] },
++  [GETGRBYNAME] = { true, &dbs[grpdb] },
++  [GETGRBYGID] = { true, &dbs[grpdb] },
++  [GETHOSTBYNAME] = { true, &dbs[hstdb] },
++  [GETHOSTBYNAMEv6] = { true, &dbs[hstdb] },
++  [GETHOSTBYADDR] = { true, &dbs[hstdb] },
++  [GETHOSTBYADDRv6] = { true, &dbs[hstdb] },
++  [SHUTDOWN] = { false, NULL },
++  [GETSTAT] = { false, NULL },
++  [SHUTDOWN] = { false, NULL },
++  [GETFDPW] = { false, &dbs[pwddb] },
++  [GETFDGR] = { false, &dbs[grpdb] },
++  [GETFDHST] = { false, &dbs[hstdb] },
++  [GETAI] = { true, &dbs[hstdb] },
++  [INITGROUPS] = { true, &dbs[grpdb] }
+ };
+ 
+ 
+-/* Number of seconds between two cache pruning runs.  */
+-#define CACHE_PRUNE_INTERVAL	15
+-
+-
+ /* Initial number of threads to use.  */
+ int nthreads = -1;
+ /* Maximum number of threads to use.  */
+@@ -190,6 +219,27 @@ int max_nthreads = 32;
+ /* Socket for incoming connections.  */
+ static int sock;
+ 
++#ifdef HAVE_INOTIFY
++/* Inotify descriptor.  */
++static int inotify_fd = -1;
++
++/* Watch descriptor for resolver configuration file.  */
++static int resolv_conf_descr = -1;
++#endif
++
++#ifndef __ASSUME_SOCK_CLOEXEC
++/* Negative if SOCK_CLOEXEC is not supported, positive if it is, zero
++   before be know the result.  */
++#ifdef SOCK_CLOEXEC
++static int have_sock_cloexec;
++#else
++#define have_sock_cloexec -1
++#endif
++#endif
++#ifndef __ASSUME_ACCEPT4
++#define have_accept4 -1
++#endif
++
+ /* Number of times clients had to wait.  */
+ unsigned long int client_queued;
+ 
+@@ -347,7 +397,9 @@ verify_persistent_db (void *mem, struct 
+   nscd_ssize_t he_cnt = 0;
+   for (nscd_ssize_t cnt = 0; cnt < head->module; ++cnt)
+     {
+-      ref_t work = head->array[cnt];
++      ref_t trail = head->array[cnt];
++      ref_t work = trail;
++      int tick = 0;
+ 
+       while (work != ENDREF)
+ 	{
+@@ -362,7 +414,7 @@ verify_persistent_db (void *mem, struct 
+ 
+ 	  /* Make sure the record is for this type of service.  */
+ 	  if (here->type >= LASTREQ
+-	      || serv2db[here->type] != &dbs[dbnr])
++	      || reqinfo[here->type].db != &dbs[dbnr])
+ 	    goto fail;
+ 
+ 	  /* Validate boolean field value.  */
+@@ -406,6 +458,13 @@ verify_persistent_db (void *mem, struct 
+ 	    }
+ 
+ 	  work = here->next;
++
++	  if (work == trail)
++	    /* A circular list, this must not happen.  */
++	    goto fail;
++	  if (tick)
++	    trail = ((struct hashentry *) (data + trail))->next;
++	  tick = 1 - tick;
+ 	}
+     }
+ 
+@@ -437,6 +496,13 @@ fail:
+ }
+ 
+ 
++#ifdef O_CLOEXEC
++# define EXTRA_O_FLAGS O_CLOEXEC
++#else
++# define EXTRA_O_FLAGS 0
++#endif
++
++
+ /* Initialize database information structures.  */
+ void
+ nscd_init (void)
+@@ -448,7 +514,20 @@ nscd_init (void)
+ 
+   if (nthreads == -1)
+     /* No configuration for this value, assume a default.  */
+-    nthreads = 2 * lastdb;
++    nthreads = 4;
++
++#ifdef HAVE_INOTIFY
++  /* Use inotify to recognize changed files.  */
++  inotify_fd = inotify_init1 (IN_NONBLOCK);
++# ifndef __ASSUME_IN_NONBLOCK
++  if (inotify_fd == -1 && errno == ENOSYS)
++    {
++      inotify_fd = inotify_init ();
++      if (inotify_fd != -1)
++	fcntl (inotify_fd, F_SETFL, O_RDONLY | O_NONBLOCK);
++    }
++# endif
++#endif
+ 
+   for (size_t cnt = 0; cnt < lastdb; ++cnt)
+     if (dbs[cnt].enabled)
+@@ -459,9 +538,10 @@ nscd_init (void)
+ 	if (dbs[cnt].persistent)
+ 	  {
+ 	    /* Try to open the appropriate file on disk.  */
+-	    int fd = open (dbs[cnt].db_filename, O_RDWR);
++	    int fd = open (dbs[cnt].db_filename, O_RDWR | EXTRA_O_FLAGS);
+ 	    if (fd != -1)
+ 	      {
++		char *msg = NULL;
+ 		struct stat64 st;
+ 		void *mem;
+ 		size_t total;
+@@ -470,23 +550,26 @@ nscd_init (void)
+ 						      sizeof (head)));
+ 		if (n != sizeof (head) || fstat64 (fd, &st) != 0)
+ 		  {
++		  fail_db_errno:
++		    /* The code is single-threaded at this point so
++		       using strerror is just fine.  */
++		    msg = strerror (errno);
+ 		  fail_db:
+ 		    dbg_log (_("invalid persistent database file \"%s\": %s"),
+-			     dbs[cnt].db_filename, strerror (errno));
++			     dbs[cnt].db_filename, msg);
+ 		    unlink (dbs[cnt].db_filename);
+ 		  }
+ 		else if (head.module == 0 && head.data_size == 0)
+ 		  {
+-		    /* The file has been created, but the head has not been
+-		       initialized yet.  Remove the old file.  */
+-		    unlink (dbs[cnt].db_filename);
++		    /* The file has been created, but the head has not
++		       been initialized yet.  */
++		    msg = _("uninitialized header");
++		    goto fail_db;
+ 		  }
+ 		else if (head.header_size != (int) sizeof (head))
+ 		  {
+-		    dbg_log (_("invalid persistent database file \"%s\": %s"),
+-			     dbs[cnt].db_filename,
+-			     _("header size does not match"));
+-		    unlink (dbs[cnt].db_filename);
++		    msg = _("header size does not match");
++		    goto fail_db;
+ 		  }
+ 		else if ((total = (sizeof (head)
+ 				   + roundup (head.module * sizeof (ref_t),
+@@ -495,10 +578,8 @@ nscd_init (void)
+ 			 > st.st_size
+ 			 || total < sizeof (head))
+ 		  {
+-		    dbg_log (_("invalid persistent database file \"%s\": %s"),
+-			     dbs[cnt].db_filename,
+-			     _("file size does not match"));
+-		    unlink (dbs[cnt].db_filename);
++		    msg = _("file size does not match");
++		    goto fail_db;
+ 		  }
+ 		/* Note we map with the maximum size allowed for the
+ 		   database.  This is likely much larger than the
+@@ -510,14 +591,12 @@ nscd_init (void)
+ 				      PROT_READ | PROT_WRITE,
+ 				      MAP_SHARED, fd, 0))
+ 			 == MAP_FAILED)
+-		  goto fail_db;
++		  goto fail_db_errno;
+ 		else if (!verify_persistent_db (mem, &head, cnt))
+ 		  {
+ 		    munmap (mem, total);
+-		    dbg_log (_("invalid persistent database file \"%s\": %s"),
+-			     dbs[cnt].db_filename,
+-			     _("verification failed"));
+-		    unlink (dbs[cnt].db_filename);
++		    msg = _("verification failed");
++		    goto fail_db;
+ 		  }
+ 		else
+ 		  {
+@@ -538,7 +617,8 @@ nscd_init (void)
+ 		    /* We also need a read-only descriptor.  */
+ 		    if (dbs[cnt].shared)
+ 		      {
+-			dbs[cnt].ro_fd = open (dbs[cnt].db_filename, O_RDONLY);
++			dbs[cnt].ro_fd = open (dbs[cnt].db_filename,
++					       O_RDONLY | EXTRA_O_FLAGS);
+ 			if (dbs[cnt].ro_fd == -1)
+ 			  dbg_log (_("\
+ cannot create read-only descriptor for \"%s\"; no mmap"),
+@@ -555,6 +635,9 @@ cannot create read-only descriptor for \
+ 		if (fd != -1)
+ 		  close (fd);
+ 	      }
++	    else if (errno == EACCES)
++	      error (EXIT_FAILURE, 0, _("cannot access '%s'"),
++		     dbs[cnt].db_filename);
+ 	  }
+ 
+ 	if (dbs[cnt].head == NULL)
+@@ -575,22 +658,27 @@ cannot create read-only descriptor for \
+ 	    if (dbs[cnt].persistent)
+ 	      {
+ 		fd = open (dbs[cnt].db_filename,
+-			   O_RDWR | O_CREAT | O_EXCL | O_TRUNC,
++			   O_RDWR | O_CREAT | O_EXCL | O_TRUNC | EXTRA_O_FLAGS,
+ 			   S_IRUSR | S_IWUSR);
+ 		if (fd != -1 && dbs[cnt].shared)
+-		  ro_fd = open (dbs[cnt].db_filename, O_RDONLY);
++		  ro_fd = open (dbs[cnt].db_filename,
++				O_RDONLY | EXTRA_O_FLAGS);
+ 	      }
+ 	    else
+ 	      {
+ 		char fname[] = _PATH_NSCD_XYZ_DB_TMP;
++#ifndef O_CLOEXEC
+ 		fd = mkstemp (fname);
++#else
++		fd = mkostemp (fname, EXTRA_O_FLAGS);
++#endif
+ 
+ 		/* We do not need the file name anymore after we
+ 		   opened another file descriptor in read-only mode.  */
+ 		if (fd != -1)
+ 		  {
+ 		    if (dbs[cnt].shared)
+-		      ro_fd = open (fname, O_RDONLY);
++		      ro_fd = open (fname, O_RDONLY | EXTRA_O_FLAGS);
+ 
+ 		    unlink (fname);
+ 		  }
+@@ -709,6 +797,11 @@ cannot create read-only descriptor for \
+ 	      }
+ 	  }
+ 
++#if !defined O_CLOEXEC || !defined __ASSUME_O_CLOEXEC
++	/* We do not check here whether the O_CLOEXEC provided to the
++	   open call was successful or not.  The two fcntl calls are
++	   only performed once each per process start-up and therefore
++	   is not noticeable at all.  */
+ 	if (paranoia
+ 	    && ((dbs[cnt].wr_fd != -1
+ 		 && fcntl (dbs[cnt].wr_fd, F_SETFD, FD_CLOEXEC) == -1)
+@@ -720,6 +813,7 @@ cannot set socket to close on exec: %s; 
+ 		     strerror (errno));
+ 	    paranoia = 0;
+ 	  }
++#endif
+ 
+ 	if (dbs[cnt].head == NULL)
+ 	  {
+@@ -744,25 +838,61 @@ cannot set socket to close on exec: %s; 
+ 	    assert (dbs[cnt].ro_fd == -1);
+ 	  }
+ 
++	dbs[cnt].inotify_descr = -1;
+ 	if (dbs[cnt].check_file)
+ 	  {
+-	    /* We need the modification date of the file.  */
+-	    struct stat64 st;
+-
+-	    if (stat64 (dbs[cnt].filename, &st) < 0)
++#ifdef HAVE_INOTIFY
++	    if (inotify_fd < 0
++		|| (dbs[cnt].inotify_descr
++		    = inotify_add_watch (inotify_fd, dbs[cnt].filename,
++					 IN_DELETE_SELF | IN_MODIFY)) < 0)
++	      /* We cannot notice changes in the main thread.  */
++#endif
+ 	      {
+-		/* We cannot stat() the file, disable file checking.  */
+-		dbg_log (_("cannot stat() file `%s': %s"),
+-			 dbs[cnt].filename, strerror (errno));
+-		dbs[cnt].check_file = 0;
++		/* We need the modification date of the file.  */
++		struct stat64 st;
++
++		if (stat64 (dbs[cnt].filename, &st) < 0)
++		  {
++		    /* We cannot stat() the file, disable file checking.  */
++		    dbg_log (_("cannot stat() file `%s': %s"),
++			     dbs[cnt].filename, strerror (errno));
++		    dbs[cnt].check_file = 0;
++		  }
++		else
++		  dbs[cnt].file_mtime = st.st_mtime;
+ 	      }
+-	    else
+-	      dbs[cnt].file_mtime = st.st_mtime;
+ 	  }
++
++#ifdef HAVE_INOTIFY
++	if (cnt == hstdb && inotify_fd >= -1)
++	  /* We also monitor the resolver configuration file.  */
++	  resolv_conf_descr = inotify_add_watch (inotify_fd,
++						 _PATH_RESCONF,
++						 IN_DELETE_SELF | IN_MODIFY);
++#endif
+       }
+ 
+   /* Create the socket.  */
++#ifdef SOCK_CLOEXEC
++#ifndef __ASSUME_SOCK_CLOEXEC
++  sock = -1;
++  if (have_sock_cloexec >= 0)
++#endif
++    {
++      sock = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
++#ifndef __ASSUME_SOCK_CLOEXEC
++      if (have_sock_cloexec == 0)
++	have_sock_cloexec = sock != -1 || errno != EINVAL ? 1 : -1;
++#endif
++    }
++#ifndef __ASSUME_SOCK_CLOEXEC
++  if (have_sock_cloexec < 0)
++    sock = socket (AF_UNIX, SOCK_STREAM, 0);
++#endif
++#else
+   sock = socket (AF_UNIX, SOCK_STREAM, 0);
++#endif
+   if (sock < 0)
+     {
+       dbg_log (_("cannot open socket: %s"), strerror (errno));
+@@ -778,22 +908,27 @@ cannot set socket to close on exec: %s; 
+       exit (errno == EACCES ? 4 : 1);
+     }
+ 
+-  /* We don't want to get stuck on accept.  */
+-  int fl = fcntl (sock, F_GETFL);
+-  if (fl == -1 || fcntl (sock, F_SETFL, fl | O_NONBLOCK) == -1)
++#ifndef __ASSUME_SOCK_CLOEXEC
++  if (have_sock_cloexec < 0)
+     {
+-      dbg_log (_("cannot change socket to nonblocking mode: %s"),
+-	       strerror (errno));
+-      exit (1);
+-    }
++      /* We don't want to get stuck on accept.  */
++      int fl = fcntl (sock, F_GETFL);
++      if (fl == -1 || fcntl (sock, F_SETFL, fl | O_NONBLOCK) == -1)
++	{
++	  dbg_log (_("cannot change socket to nonblocking mode: %s"),
++		   strerror (errno));
++	  exit (1);
++	}
+ 
+-  /* The descriptor needs to be closed on exec.  */
+-  if (paranoia && fcntl (sock, F_SETFD, FD_CLOEXEC) == -1)
+-    {
+-      dbg_log (_("cannot set socket to close on exec: %s"),
+-	       strerror (errno));
+-      exit (1);
++      /* The descriptor needs to be closed on exec.  */
++      if (paranoia && fcntl (sock, F_SETFD, FD_CLOEXEC) == -1)
++	{
++	  dbg_log (_("cannot set socket to close on exec: %s"),
++		   strerror (errno));
++	  exit (1);
++	}
+     }
++#endif
+ 
+   /* Set permissions for the socket.  */
+   chmod (_PATH_NSCDSOCKET, DEFFILEMODE);
+@@ -826,18 +961,16 @@ invalidate_cache (char *key, int fd)
+   dbtype number;
+   int32_t resp;
+ 
+-  if (strcmp (key, "passwd") == 0)
+-    number = pwddb;
+-  else if (strcmp (key, "group") == 0)
+-    number = grpdb;
+-  else if (__builtin_expect (strcmp (key, "hosts"), 0) == 0)
+-    {
+-      number = hstdb;
++  for (number = pwddb; number < lastdb; ++number)
++    if (strcmp (key, dbnames[number]) == 0)
++      {
++	if (dbs[number].reset_res)
++	  res_init ();
+ 
+-      /* Re-initialize the resolver.  resolv.conf might have changed.  */
+-      res_init ();
+-    }
+-  else
++	break;
++      }
++
++  if (number == lastdb)
+     {
+       resp = EINVAL;
+       writeall (fd, &resp, sizeof (resp));
+@@ -845,7 +978,11 @@ invalidate_cache (char *key, int fd)
+     }
+ 
+   if (dbs[number].enabled)
+-    prune_cache (&dbs[number], LONG_MAX, fd);
++    {
++      pthread_mutex_lock (&dbs[number].prune_run_lock);
++      prune_cache (&dbs[number], LONG_MAX, fd);
++      pthread_mutex_unlock (&dbs[number].prune_run_lock);
++    }
+   else
+     {
+       resp = 0;
+@@ -863,9 +1000,14 @@ send_ro_fd (struct database_dyn *db, cha
+     return;
+ 
+   /* We need to send some data along with the descriptor.  */
+-  struct iovec iov[1];
++  uint64_t mapsize = (db->head->data_size
++		      + roundup (db->head->module * sizeof (ref_t), ALIGN)
++		      + sizeof (struct database_pers_head));
++  struct iovec iov[2];
+   iov[0].iov_base = key;
+   iov[0].iov_len = strlen (key) + 1;
++  iov[1].iov_base = &mapsize;
++  iov[1].iov_len = sizeof (mapsize);
+ 
+   /* Prepare the control message to transfer the descriptor.  */
+   union
+@@ -873,7 +1015,7 @@ send_ro_fd (struct database_dyn *db, cha
+     struct cmsghdr hdr;
+     char bytes[CMSG_SPACE (sizeof (int))];
+   } buf;
+-  struct msghdr msg = { .msg_iov = iov, .msg_iovlen = 1,
++  struct msghdr msg = { .msg_iov = iov, .msg_iovlen = 2,
+ 			.msg_control = buf.bytes,
+ 			.msg_controllen = sizeof (buf) };
+   struct cmsghdr *cmsg = CMSG_FIRSTHDR (&msg);
+@@ -882,7 +1024,8 @@ send_ro_fd (struct database_dyn *db, cha
+   cmsg->cmsg_type = SCM_RIGHTS;
+   cmsg->cmsg_len = CMSG_LEN (sizeof (int));
+ 
+-  *(int *) CMSG_DATA (cmsg) = db->ro_fd;
++  int *ip = (int *) CMSG_DATA (cmsg);
++  *ip = db->ro_fd;
+ 
+   msg.msg_controllen = cmsg->cmsg_len;
+ 
+@@ -901,7 +1044,7 @@ send_ro_fd (struct database_dyn *db, cha
+ 
+ /* Handle new request.  */
+ static void
+-handle_request (int fd, request_header *req, void *key, uid_t uid)
++handle_request (int fd, request_header *req, void *key, uid_t uid, pid_t pid)
+ {
+   if (__builtin_expect (req->version, NSCD_VERSION) != NSCD_VERSION)
+     {
+@@ -912,22 +1055,42 @@ cannot handle old request version %d; cu
+       return;
+     }
+ 
+-  /* Make the SELinux check before we go on to the standard checks.  We
+-     need to verify that the request type is valid, since it has not
+-     yet been checked at this point.  */
+-  if (selinux_enabled
+-      && __builtin_expect (req->type, GETPWBYNAME) >= GETPWBYNAME
+-      && __builtin_expect (req->type, LASTREQ) < LASTREQ
+-      && nscd_request_avc_has_perm (fd, req->type) != 0)
+-    return;
++  /* Perform the SELinux check before we go on to the standard checks.  */
++  if (selinux_enabled && nscd_request_avc_has_perm (fd, req->type) != 0)
++    {
++      if (debug_level > 0)
++	{
++#ifdef SO_PEERCRED
++# ifdef PATH_MAX
++	  char buf[PATH_MAX];
++# else
++	  char buf[4096];
++# endif
++
++	  snprintf (buf, sizeof (buf), "/proc/%ld/exe", (long int) pid);
++	  ssize_t n = readlink (buf, buf, sizeof (buf) - 1);
++
++	  if (n <= 0)
++	    dbg_log (_("\
++request from %ld not handled due to missing permission"), (long int) pid);
++	  else
++	    {
++	      buf[n] = '\0';
++	      dbg_log (_("\
++request from '%s' [%ld] not handled due to missing permission"),
++		       buf, (long int) pid);
++	    }
++#else
++	  dbg_log (_("request not handled due to missing permission"));
++#endif
++	}
++      return;
++    }
+ 
+-  struct database_dyn *db = serv2db[req->type];
++  struct database_dyn *db = reqinfo[req->type].db;
+ 
+-  // XXX Clean up so that each new command need not introduce a
+-  // XXX new conditional.
+-  if ((__builtin_expect (req->type, GETPWBYNAME) >= GETPWBYNAME
+-       && __builtin_expect (req->type, LASTDBREQ) <= LASTDBREQ)
+-      || req->type == GETAI || req->type == INITGROUPS)
++  /* See whether we can service the request from the cache.  */
++  if (__builtin_expect (reqinfo[req->type].data_request, true))
+     {
+       if (__builtin_expect (debug_level, 0) > 0)
+ 	{
+@@ -945,7 +1108,7 @@ cannot handle old request version %d; cu
+ 	}
+ 
+       /* Is this service enabled?  */
+-      if (!db->enabled)
++      if (__builtin_expect (!db->enabled, 0))
+ 	{
+ 	  /* No, sent the prepared record.  */
+ 	  if (TEMP_FAILURE_RETRY (send (fd, db->disabled_iov->iov_base,
+@@ -980,7 +1143,7 @@ cannot handle old request version %d; cu
+ 	  ssize_t nwritten;
+ 
+ #ifdef HAVE_SENDFILE
+-	  if (db->mmap_used || !cached->notfound)
++	  if (__builtin_expect (db->mmap_used, 1))
+ 	    {
+ 	      assert (db->wr_fd != -1);
+ 	      assert ((char *) cached->data > (char *) db->data);
+@@ -1117,7 +1280,7 @@ cannot handle old request version %d; cu
+     case GETFDGR:
+     case GETFDHST:
+ #ifdef SCM_RIGHTS
+-      send_ro_fd (serv2db[req->type], key, fd);
++      send_ro_fd (reqinfo[req->type].db, key, fd);
+ #endif
+       break;
+ 
+@@ -1157,7 +1320,7 @@ cannot open /proc/self/cmdline: %s; disa
+       if (n == -1)
+ 	{
+ 	  dbg_log (_("\
+-cannot open /proc/self/cmdline: %s; disabling paranoia mode"),
++cannot read /proc/self/cmdline: %s; disabling paranoia mode"),
+ 		   strerror (errno));
+ 
+ 	  close (fd);
+@@ -1233,11 +1396,14 @@ cannot change to old working directory: 
+     }
+ 
+   /* Synchronize memory.  */
++  int32_t certainly[lastdb];
+   for (int cnt = 0; cnt < lastdb; ++cnt)
+     if (dbs[cnt].enabled)
+       {
+ 	/* Make sure nobody keeps using the database.  */
+ 	dbs[cnt].head->timestamp = 0;
++	certainly[cnt] = dbs[cnt].head->nscd_certainly_running;
++	dbs[cnt].head->nscd_certainly_running = 0;
+ 
+ 	if (dbs[cnt].persistent)
+ 	  // XXX async OK?
+@@ -1275,6 +1441,15 @@ cannot change to old working directory: 
+     dbg_log (_("cannot change current working directory to \"/\": %s"),
+ 	     strerror (errno));
+   paranoia = 0;
++
++  /* Reenable the databases.  */
++  time_t now = time (NULL);
++  for (int cnt = 0; cnt < lastdb; ++cnt)
++    if (dbs[cnt].enabled)
++      {
++	dbs[cnt].head->timestamp = now;
++	dbs[cnt].head->nscd_certainly_running = certainly[cnt];
++      }
+ }
+ 
+ 
+@@ -1292,7 +1467,7 @@ static struct fdlist *readylist;
+ /* Conditional variable and mutex to signal availability of entries in
+    READYLIST.  The condvar is initialized dynamically since we might
+    use a different clock depending on availability.  */
+-static pthread_cond_t readylist_cond;
++static pthread_cond_t readylist_cond = PTHREAD_COND_INITIALIZER;
+ static pthread_mutex_t readylist_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
+ /* The clock to use with the condvar.  */
+@@ -1302,32 +1477,115 @@ static clockid_t timeout_clock = CLOCK_R
+ static unsigned long int nready;
+ 
+ 
+-/* This is the main loop.  It is replicated in different threads but the
+-   `poll' call makes sure only one thread handles an incoming connection.  */
++/* Function for the clean-up threads.  */
+ static void *
+ __attribute__ ((__noreturn__))
+-nscd_run (void *p)
++nscd_run_prune (void *p)
+ {
+   const long int my_number = (long int) p;
+-  const int run_prune = my_number < lastdb && dbs[my_number].enabled;
++  assert (dbs[my_number].enabled);
++
++  int dont_need_update = setup_thread (&dbs[my_number]);
++
++  time_t now = time (NULL);
++
++  /* We are running.  */
++  dbs[my_number].head->timestamp = now;
++
+   struct timespec prune_ts;
+-  int to = 0;
+-  char buf[256];
++  if (__builtin_expect (clock_gettime (timeout_clock, &prune_ts) == -1, 0))
++    /* Should never happen.  */
++    abort ();
++
++  /* Compute the initial timeout time.  Prevent all the timers to go
++     off at the same time by adding a db-based value.  */
++  prune_ts.tv_sec += CACHE_PRUNE_INTERVAL + my_number;
++  dbs[my_number].wakeup_time = now + CACHE_PRUNE_INTERVAL + my_number;
++
++  pthread_mutex_t *prune_lock = &dbs[my_number].prune_lock;
++  pthread_mutex_t *prune_run_lock = &dbs[my_number].prune_run_lock;
++  pthread_cond_t *prune_cond = &dbs[my_number].prune_cond;
+ 
+-  if (run_prune)
++  pthread_mutex_lock (prune_lock);
++  while (1)
+     {
+-      setup_thread (&dbs[my_number]);
++      /* Wait, but not forever.  */
++      int e = 0;
++      if (! dbs[my_number].clear_cache)
++	e = pthread_cond_timedwait (prune_cond, prune_lock, &prune_ts);
++      assert (__builtin_expect (e == 0 || e == ETIMEDOUT, 1));
++
++      time_t next_wait;
++      now = time (NULL);
++      if (e == ETIMEDOUT || now >= dbs[my_number].wakeup_time
++	  || dbs[my_number].clear_cache)
++	{
++	  /* We will determine the new timout values based on the
++	     cache content.  Should there be concurrent additions to
++	     the cache which are not accounted for in the cache
++	     pruning we want to know about it.  Therefore set the
++	     timeout to the maximum.  It will be descreased when adding
++	     new entries to the cache, if necessary.  */
++	  if (sizeof (time_t) == sizeof (long int))
++	    dbs[my_number].wakeup_time = LONG_MAX;
++	  else
++	    dbs[my_number].wakeup_time = INT_MAX;
+ 
+-      /* We are running.  */
+-      dbs[my_number].head->timestamp = time (NULL);
++	  /* Unconditionally reset the flag.  */
++	  time_t prune_now = dbs[my_number].clear_cache ? LONG_MAX : now;
++	  dbs[my_number].clear_cache = 0;
++
++	  pthread_mutex_unlock (prune_lock);
++
++	  /* We use a separate lock for running the prune function (instead
++	     of keeping prune_lock locked) because this enables concurrent
++	     invocations of cache_add which might modify the timeout value.  */
++	  pthread_mutex_lock (prune_run_lock);
++	  next_wait = prune_cache (&dbs[my_number], prune_now, -1);
++	  pthread_mutex_unlock (prune_run_lock);
++
++	  next_wait = MAX (next_wait, CACHE_PRUNE_INTERVAL);
++	  /* If clients cannot determine for sure whether nscd is running
++	     we need to wake up occasionally to update the timestamp.
++	     Wait 90% of the update period.  */
++#define UPDATE_MAPPING_TIMEOUT (MAPPING_TIMEOUT * 9 / 10)
++	  if (__builtin_expect (! dont_need_update, 0))
++	    {
++	      next_wait = MIN (UPDATE_MAPPING_TIMEOUT, next_wait);
++	      dbs[my_number].head->timestamp = now;
++	    }
++
++	  pthread_mutex_lock (prune_lock);
++
++	  /* Make it known when we will wake up again.  */
++	  if (now + next_wait < dbs[my_number].wakeup_time)
++	    dbs[my_number].wakeup_time = now + next_wait;
++	  else
++	    next_wait = dbs[my_number].wakeup_time - now;
++	}
++      else
++	/* The cache was just pruned.  Do not do it again now.  Just
++	   use the new timeout value.  */
++	next_wait = dbs[my_number].wakeup_time - now;
+ 
+       if (clock_gettime (timeout_clock, &prune_ts) == -1)
+ 	/* Should never happen.  */
+ 	abort ();
+ 
+-      /* Compute timeout time.  */
+-      prune_ts.tv_sec += CACHE_PRUNE_INTERVAL;
++      /* Compute next timeout time.  */
++      prune_ts.tv_sec += next_wait;
+     }
++}
++
++
++/* This is the main loop.  It is replicated in different threads but
++   the the use of the ready list makes sure only one thread handles an
++   incoming connection.  */
++static void *
++__attribute__ ((__noreturn__))
++nscd_run_worker (void *p)
++{
++  char buf[256];
+ 
+   /* Initial locking.  */
+   pthread_mutex_lock (&readylist_lock);
+@@ -1339,56 +1597,16 @@ nscd_run (void *p)
+     {
+       while (readylist == NULL)
+ 	{
+-	  if (run_prune)
++	wait_for_next:
++	  pthread_cond_wait (&readylist_cond, &readylist_lock);
++	  if (readylist == NULL && sighup_pending)
+ 	    {
+-	      /* Wait, but not forever.  */
+-	      to = pthread_cond_timedwait (&readylist_cond, &readylist_lock,
+-					   &prune_ts);
+-
+-	      /* If we were woken and there is no work to be done,
+-		 just start pruning.  */
+-	      if (readylist == NULL && to == ETIMEDOUT)
+-		{
+-		  --nready;
+-
+-		  if (sighup_pending)
+-		    goto sighup_prune;
+-
+-		  pthread_mutex_unlock (&readylist_lock);
+-		  goto only_prune;
+-		}
++	      pthread_mutex_unlock (&readylist_lock);
++	      if (sighup_pending)
++		handle_sighup_pending ();
++	      pthread_mutex_lock (&readylist_lock);
++	      goto wait_for_next;
+ 	    }
+-	  else
+-	    /* No need to timeout.  */
+-	    pthread_cond_wait (&readylist_cond, &readylist_lock);
+-	}
+-
+-      if (sighup_pending)
+-	{
+-	  --nready;
+-	  pthread_cond_signal (&readylist_cond);
+-	sighup_prune:
+-	  sighup_pending = 0;
+-	  pthread_mutex_unlock (&readylist_lock);
+-
+-	  /* Prune the password database.  */
+-	  if (dbs[pwddb].enabled)
+-	    prune_cache (&dbs[pwddb], LONG_MAX, -1);
+-
+-	  /* Prune the group database.  */
+-	  if (dbs[grpdb].enabled)
+-	    prune_cache (&dbs[grpdb], LONG_MAX, -1);
+-
+-	  /* Prune the host database.  */
+-	  if (dbs[hstdb].enabled)
+-	    prune_cache (&dbs[hstdb], LONG_MAX, -1);
+-
+-	  /* Re-locking.  */
+-	  pthread_mutex_lock (&readylist_lock);
+-
+-	  /* One more thread available.  */
+-	  ++nready;
+-	  continue;
+ 	}
+ 
+       struct fdlist *it = readylist->next;
+@@ -1409,10 +1627,18 @@ nscd_run (void *p)
+       /* We are done with the list.  */
+       pthread_mutex_unlock (&readylist_lock);
+ 
+-      /* We do not want to block on a short read or so.  */
+-      int fl = fcntl (fd, F_GETFL);
+-      if (fl == -1 || fcntl (fd, F_SETFL, fl | O_NONBLOCK) == -1)
+-	goto close_and_out;
++      if (sighup_pending)
++	handle_sighup_pending ();
++
++#ifndef __ASSUME_ACCEPT4
++      if (have_accept4 < 0)
++	{
++	  /* We do not want to block on a short read or so.  */
++	  int fl = fcntl (fd, F_GETFL);
++	  if (fl == -1 || fcntl (fd, F_SETFL, fl | O_NONBLOCK) == -1)
++	    goto close_and_out;
++	}
++#endif
+ 
+       /* Now read the request.  */
+       request_header req;
+@@ -1445,11 +1671,12 @@ nscd_run (void *p)
+ 	  if (getsockopt (fd, SOL_SOCKET, SO_PEERCRED, &caller, &optlen) == 0)
+ 	    pid = caller.pid;
+ 	}
++#else
++      const pid_t pid = 0;
+ #endif
+ 
+       /* It should not be possible to crash the nscd with a silly
+ 	 request (i.e., a terribly large key).  We limit the size to 1kb.  */
+-#define MAXKEYLEN 1024
+       if (__builtin_expect (req.key_len, 1) < 0
+ 	  || __builtin_expect (req.key_len, 1) > MAXKEYLEN)
+ 	{
+@@ -1486,41 +1713,20 @@ handle_request: request received (Versio
+ 	    }
+ 
+ 	  /* Phew, we got all the data, now process it.  */
+-	  handle_request (fd, &req, keybuf, uid);
++	  handle_request (fd, &req, keybuf, uid, pid);
+ 	}
+ 
+     close_and_out:
+       /* We are done.  */
+       close (fd);
+ 
+-      /* Check whether we should be pruning the cache. */
+-      assert (run_prune || to == 0);
+-      if (to == ETIMEDOUT)
+-	{
+-	only_prune:
+-	  /* The pthread_cond_timedwait() call timed out.  It is time
+-		 to clean up the cache.  */
+-	  assert (my_number < lastdb);
+-	  prune_cache (&dbs[my_number], time (NULL), -1);
+-
+-	  if (clock_gettime (timeout_clock, &prune_ts) == -1)
+-	    /* Should never happen.  */
+-	    abort ();
+-
+-	  /* Compute next timeout time.  */
+-	  prune_ts.tv_sec += CACHE_PRUNE_INTERVAL;
+-
+-	  /* In case the list is emtpy we do not want to run the prune
+-	     code right away again.  */
+-	  to = 0;
+-	}
+-
+       /* Re-locking.  */
+       pthread_mutex_lock (&readylist_lock);
+ 
+       /* One more thread available.  */
+       ++nready;
+     }
++  /* NOTREACHED */
+ }
+ 
+ 
+@@ -1557,7 +1763,7 @@ fd_ready (int fd)
+       /* Try to start another thread to help out.  */
+       pthread_t th;
+       if (nthreads < max_nthreads
+-	  && pthread_create (&th, &attr, nscd_run,
++	  && pthread_create (&th, &attr, nscd_run_worker,
+ 			     (void *) (long int) nthreads) == 0)
+ 	{
+ 	  /* We got another thread.  */
+@@ -1601,6 +1807,16 @@ main_loop_poll (void)
+   size_t nused = 1;
+   size_t firstfree = 1;
+ 
++#ifdef HAVE_INOTIFY
++  if (inotify_fd != -1)
++    {
++      conns[1].fd = inotify_fd;
++      conns[1].events = POLLRDNORM;
++      nused = 2;
++      firstfree = 2;
++    }
++#endif
++
+   while (1)
+     {
+       /* Wait for any event.  We wait at most a couple of seconds so
+@@ -1616,6 +1832,9 @@ main_loop_poll (void)
+ 
+       time_t now = time (NULL);
+ 
++      if (sighup_pending)
++	handle_sighup_pending ();
++
+       /* If there is a descriptor ready for reading or there is a new
+ 	 connection, process this now.  */
+       if (n > 0)
+@@ -1623,7 +1842,26 @@ main_loop_poll (void)
+ 	  if (conns[0].revents != 0)
+ 	    {
+ 	      /* We have a new incoming connection.  Accept the connection.  */
+-	      int fd = TEMP_FAILURE_RETRY (accept (sock, NULL, NULL));
++	      int fd;
++
++#ifndef __ASSUME_ACCEPT4
++	      fd = -1;
++	      if (have_accept4 >= 0)
++#endif
++		{
++#ifndef have_accept4
++		  fd = TEMP_FAILURE_RETRY (accept4 (sock, NULL, NULL,
++						    SOCK_NONBLOCK));
++#ifndef __ASSUME_ACCEPT4
++		  if (have_accept4 == 0)
++		    have_accept4 = fd != -1 || errno != ENOSYS ? 1 : -1;
++#endif
++#endif
++		}
++#ifndef __ASSUME_ACCEPT4
++	      if (have_accept4 < 0)
++		fd = TEMP_FAILURE_RETRY (accept (sock, NULL, NULL));
++#endif
+ 
+ 	      /* Use the descriptor if we have not reached the limit.  */
+ 	      if (fd >= 0)
+@@ -1648,7 +1886,80 @@ main_loop_poll (void)
+ 	      --n;
+ 	    }
+ 
+-	  for (size_t cnt = 1; cnt < nused && n > 0; ++cnt)
++	  size_t first = 1;
++#ifdef HAVE_INOTIFY
++	  if (inotify_fd != -1 && conns[1].fd == inotify_fd)
++	    {
++	      if (conns[1].revents != 0)
++		{
++		  bool to_clear[lastdb] = { false, };
++		  union
++		  {
++# ifndef PATH_MAX
++#  define PATH_MAX 1024
++# endif
++		    struct inotify_event i;
++		    char buf[sizeof (struct inotify_event) + PATH_MAX];
++		  } inev;
++
++		  while (1)
++		    {
++		      ssize_t nb = TEMP_FAILURE_RETRY (read (inotify_fd, &inev,
++							     sizeof (inev)));
++		      if (nb < (ssize_t) sizeof (struct inotify_event))
++			{
++			  if (__builtin_expect (nb == -1 && errno != EAGAIN,
++						0))
++			    {
++			      /* Something went wrong when reading the inotify
++				 data.  Better disable inotify.  */
++			      dbg_log (_("\
++disabled inotify after read error %d"),
++				       errno);
++			      conns[1].fd = -1;
++			      firstfree = 1;
++			      if (nused == 2)
++				nused = 1;
++			      close (inotify_fd);
++			      inotify_fd = -1;
++			    }
++			  break;
++			}
++
++		      /* Check which of the files changed.  */
++		      for (size_t dbcnt = 0; dbcnt < lastdb; ++dbcnt)
++			if (inev.i.wd == dbs[dbcnt].inotify_descr)
++			  {
++			    to_clear[dbcnt] = true;
++			    goto next;
++			  }
++
++		      if (inev.i.wd == resolv_conf_descr)
++			{
++			  res_init ();
++			  to_clear[hstdb] = true;
++			}
++		    next:;
++		    }
++
++		  /* Actually perform the cache clearing.  */
++		  for (size_t dbcnt = 0; dbcnt < lastdb; ++dbcnt)
++		    if (to_clear[dbcnt])
++		      {
++			pthread_mutex_lock (&dbs[dbcnt].prune_lock);
++			dbs[dbcnt].clear_cache = 1;
++			pthread_mutex_unlock (&dbs[dbcnt].prune_lock);
++			pthread_cond_signal (&dbs[dbcnt].prune_cond);
++		      }
++
++		  --n;
++		}
++
++	      first = 2;
++	    }
++#endif
++
++	  for (size_t cnt = first; cnt < nused && n > 0; ++cnt)
+ 	    if (conns[cnt].revents != 0)
+ 	      {
+ 		fd_ready (conns[cnt].fd);
+@@ -1714,6 +2025,18 @@ main_loop_epoll (int efd)
+     /* We cannot use epoll.  */
+     return;
+ 
++# ifdef HAVE_INOTIFY
++  if (inotify_fd != -1)
++    {
++      ev.events = EPOLLRDNORM;
++      ev.data.fd = inotify_fd;
++      if (epoll_ctl (efd, EPOLL_CTL_ADD, inotify_fd, &ev) == -1)
++	/* We cannot use epoll.  */
++	return;
++      nused = 2;
++    }
++# endif
++
+   while (1)
+     {
+       struct epoll_event revs[100];
+@@ -1723,12 +2046,35 @@ main_loop_epoll (int efd)
+ 
+       time_t now = time (NULL);
+ 
++      if (sighup_pending)
++	handle_sighup_pending ();
++
+       for (int cnt = 0; cnt < n; ++cnt)
+ 	if (revs[cnt].data.fd == sock)
+ 	  {
+ 	    /* A new connection.  */
+-	    int fd = TEMP_FAILURE_RETRY (accept (sock, NULL, NULL));
++	    int fd;
++
++# ifndef __ASSUME_ACCEPT4
++	    fd = -1;
++	    if (have_accept4 >= 0)
++# endif
++	      {
++# ifndef have_accept4
++		fd = TEMP_FAILURE_RETRY (accept4 (sock, NULL, NULL,
++						  SOCK_NONBLOCK));
++# ifndef __ASSUME_ACCEPT4
++		if (have_accept4 == 0)
++		  have_accept4 = fd != -1 || errno != ENOSYS ? 1 : -1;
++# endif
++# endif
++	      }
++# ifndef __ASSUME_ACCEPT4
++	    if (have_accept4 < 0)
++	      fd = TEMP_FAILURE_RETRY (accept (sock, NULL, NULL));
++# endif
+ 
++	    /* Use the descriptor if we have not reached the limit.  */
+ 	    if (fd >= 0)
+ 	      {
+ 		/* Try to add the  new descriptor.  */
+@@ -1750,6 +2096,63 @@ main_loop_epoll (int efd)
+ 		  }
+ 	      }
+ 	  }
++# ifdef HAVE_INOTIFY
++	else if (revs[cnt].data.fd == inotify_fd)
++	  {
++	    bool to_clear[lastdb] = { false, };
++	    union
++	    {
++	      struct inotify_event i;
++	      char buf[sizeof (struct inotify_event) + PATH_MAX];
++	    } inev;
++
++	    while (1)
++	      {
++		ssize_t nb = TEMP_FAILURE_RETRY (read (inotify_fd, &inev,
++				 		 sizeof (inev)));
++		if (nb < (ssize_t) sizeof (struct inotify_event))
++		  {
++		    if (__builtin_expect (nb == -1 && errno != EAGAIN, 0))
++		      {
++			/* Something went wrong when reading the inotify
++			   data.  Better disable inotify.  */
++			dbg_log (_("disabled inotify after read error %d"),
++				 errno);
++			(void) epoll_ctl (efd, EPOLL_CTL_DEL, inotify_fd,
++					  NULL);
++			close (inotify_fd);
++			inotify_fd = -1;
++		      }
++		    break;
++		  }
++
++		/* Check which of the files changed.  */
++		for (size_t dbcnt = 0; dbcnt < lastdb; ++dbcnt)
++		  if (inev.i.wd == dbs[dbcnt].inotify_descr)
++		    {
++		      to_clear[dbcnt] = true;
++		      goto next;
++		    }
++
++		if (inev.i.wd == resolv_conf_descr)
++		  {
++		    res_init ();
++		    to_clear[hstdb] = true;
++		  }
++	      next:;
++	      }
++
++	    /* Actually perform the cache clearing.  */
++	    for (size_t dbcnt = 0; dbcnt < lastdb; ++dbcnt)
++	      if (to_clear[dbcnt])
++		{
++		  pthread_mutex_lock (&dbs[dbcnt].prune_lock);
++		  dbs[dbcnt].clear_cache = 1;
++		  pthread_mutex_unlock (&dbs[dbcnt].prune_lock);
++		  pthread_cond_signal (&dbs[dbcnt].prune_cond);
++		}
++	  }
++# endif
+ 	else
+ 	  {
+ 	    /* Remove the descriptor from the epoll descriptor.  */
+@@ -1771,8 +2174,10 @@ main_loop_epoll (int efd)
+       /*  Now look for descriptors for accepted connections which have
+ 	  no reply in too long of a time.  */
+       time_t laststart = now - ACCEPT_TIMEOUT;
++      assert (starttime[sock] == 0);
++      assert (inotify_fd == -1 || starttime[inotify_fd] == 0);
+       for (int cnt = highest; cnt > STDERR_FILENO; --cnt)
+-	if (cnt != sock && starttime[cnt] != 0 && starttime[cnt] < laststart)
++	if (starttime[cnt] != 0 && starttime[cnt] < laststart)
+ 	  {
+ 	    /* We are waiting for this one for too long.  Close it.  */
+ 	    (void) epoll_ctl (efd, EPOLL_CTL_DEL, cnt, NULL);
+@@ -1817,10 +2222,6 @@ start_threads (void)
+ 	timeout_clock = CLOCK_MONOTONIC;
+ #endif
+ 
+-  pthread_cond_init (&readylist_cond, &condattr);
+-  pthread_condattr_destroy (&condattr);
+-
+-
+   /* Create the attribute for the threads.  They are all created
+      detached.  */
+   pthread_attr_init (&attr);
+@@ -1832,19 +2233,46 @@ start_threads (void)
+   if (debug_level == 0)
+     nthreads = MAX (nthreads, lastdb);
+ 
+-  int nfailed = 0;
+-  for (long int i = 0; i < nthreads; ++i)
++  /* Create the threads which prune the databases.  */
++  // XXX Ideally this work would be done by some of the worker threads.
++  // XXX But this is problematic since we would need to be able to wake
++  // XXX them up explicitly as well as part of the group handling the
++  // XXX ready-list.  This requires an operation where we can wait on
++  // XXX two conditional variables at the same time.  This operation
++  // XXX does not exist (yet).
++  for (long int i = 0; i < lastdb; ++i)
+     {
++      /* Initialize the conditional variable.  */
++      if (pthread_cond_init (&dbs[i].prune_cond, &condattr) != 0)
++	{
++	  dbg_log (_("could not initialize conditional variable"));
++	  exit (1);
++	}
++
+       pthread_t th;
+-      if (pthread_create (&th, &attr, nscd_run, (void *) (i - nfailed)) != 0)
+-	++nfailed;
++      if (dbs[i].enabled
++	  && pthread_create (&th, &attr, nscd_run_prune, (void *) i) != 0)
++	{
++	  dbg_log (_("could not start clean-up thread; terminating"));
++	  exit (1);
++	}
+     }
+-  if (nthreads - nfailed < lastdb)
++
++  pthread_condattr_destroy (&condattr);
++
++  for (long int i = 0; i < nthreads; ++i)
+     {
+-      /* We could not start enough threads.  */
+-      dbg_log (_("could only start %d threads; terminating"),
+-	       nthreads - nfailed);
+-      exit (1);
++      pthread_t th;
++      if (pthread_create (&th, &attr, nscd_run_worker, NULL) != 0)
++	{
++	  if (i == 0)
++	    {
++	      dbg_log (_("could not start any worker thread; terminating"));
++	      exit (1);
++	    }
++
++	  break;
++	}
+     }
+ 
+   /* Determine how much room for descriptors we should initially
+--- libc/nscd/grpcache.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/grpcache.c	2009-02-16 08:47:30.000000000 -0500
+@@ -1,11 +1,12 @@
+ /* Cache handling for group lookup.
+-   Copyright (C) 1998-2005, 2006 Free Software Foundation, Inc.
++   Copyright (C) 1998-2008, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -143,7 +144,7 @@ cache_addgr (struct database_dyn *db, in
+ 		}
+ 
+ 	      (void) cache_add (req->type, &dataset->strdata, req->key_len,
+-				&dataset->head, true, db, owner);
++				&dataset->head, true, db, owner, he == NULL);
+ 
+ 	      pthread_rwlock_unlock (&db->lock);
+ 
+@@ -184,7 +185,7 @@ cache_addgr (struct database_dyn *db, in
+ 	  gr_mem_len_total += gr_mem_len[gr_mem_cnt];
+ 	}
+ 
+-      written = total = (sizeof (struct dataset)
++      written = total = (offsetof (struct dataset, strdata)
+ 			 + gr_mem_cnt * sizeof (uint32_t)
+ 			 + gr_name_len + gr_passwd_len + gr_mem_len_total);
+ 
+@@ -241,6 +242,9 @@ cache_addgr (struct database_dyn *db, in
+       char *key_copy = cp + key_offset;
+       assert (key_copy == (char *) rawmemchr (cp, '\0') + 1);
+ 
++      assert (cp == dataset->strdata + total - offsetof (struct dataset,
++							 strdata));
++
+       /* Now we can determine whether on refill we have to create a new
+ 	 record or not.  */
+       if (he != NULL)
+@@ -336,7 +340,7 @@ cache_addgr (struct database_dyn *db, in
+ 	  if (req->type == GETGRBYGID)
+ 	    {
+ 	      if (cache_add (GETGRBYGID, cp, key_offset, &dataset->head, true,
+-			     db, owner) < 0)
++			     db, owner, he == NULL) < 0)
+ 		goto out;
+ 
+ 	      first = false;
+@@ -345,7 +349,7 @@ cache_addgr (struct database_dyn *db, in
+ 	  else if (strcmp (key_copy, gr_name) != 0)
+ 	    {
+ 	      if (cache_add (GETGRBYNAME, key_copy, key_len + 1,
+-			     &dataset->head, true, db, owner) < 0)
++			     &dataset->head, true, db, owner, he == NULL) < 0)
+ 		goto out;
+ 
+ 	      first = false;
+@@ -355,12 +359,13 @@ cache_addgr (struct database_dyn *db, in
+ 	  if ((req->type == GETGRBYNAME || db->propagate)
+ 	      && __builtin_expect (cache_add (GETGRBYNAME, gr_name,
+ 					      gr_name_len,
+-					      &dataset->head, first, db, owner)
++					      &dataset->head, first, db, owner,
++					      he == NULL)
+ 				   == 0, 1))
+ 	    {
+ 	      if (req->type == GETGRBYNAME && db->propagate)
+ 		(void) cache_add (GETGRBYGID, cp, key_offset, &dataset->head,
+-				  false, db, owner);
++				  false, db, owner, false);
+ 	    }
+ 
+ 	out:
+@@ -419,23 +424,14 @@ addgrbyX (struct database_dyn *db, int f
+ 	dbg_log (_("Reloading \"%s\" in group cache!"), keystr);
+     }
+ 
+-#if 0
+-  uid_t oldeuid = 0;
+-  if (db->secure)
+-    {
+-      oldeuid = geteuid ();
+-      pthread_seteuid_np (uid);
+-    }
+-#endif
+-
+   while (lookup (req->type, key, &resultbuf, buffer, buflen, &grp) != 0
+ 	 && (errval = errno) == ERANGE)
+     {
+-      char *old_buffer = buffer;
+       errno = 0;
+ 
+       if (__builtin_expect (buflen > 32768, 0))
+ 	{
++	  char *old_buffer = buffer;
+ 	  buflen *= 2;
+ 	  buffer = (char *) realloc (use_malloc ? buffer : NULL, buflen);
+ 	  if (buffer == NULL)
+@@ -460,11 +456,6 @@ addgrbyX (struct database_dyn *db, int f
+ 	buffer = (char *) extend_alloca (buffer, buflen, 2 * buflen);
+     }
+ 
+-#if 0
+-  if (db->secure)
+-    pthread_seteuid_np (oldeuid);
+-#endif
+-
+   cache_addgr (db, fd, req, keystr, grp, uid, he, dh, errval);
+ 
+   if (use_malloc)
+--- libc/nscd/hstcache.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/hstcache.c	2009-02-16 08:47:30.000000000 -0500
+@@ -1,11 +1,12 @@
+ /* Cache handling for host lookup.
+-   Copyright (C) 1998-2005, 2006 Free Software Foundation, Inc.
++   Copyright (C) 1998-2008, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -82,8 +83,7 @@ cache_addhst (struct database_dyn *db, i
+ 	      struct hashentry *const he, struct datahead *dh, int errval,
+ 	      int32_t ttl)
+ {
+-  ssize_t total;
+-  ssize_t written;
++  bool all_written = true;
+   time_t t = time (NULL);
+ 
+   /* We allocate all data in one memory block: the iov vector,
+@@ -107,18 +107,17 @@ cache_addhst (struct database_dyn *db, i
+ 	  if (reload_count != UINT_MAX)
+ 	    /* Do not reset the value if we never not reload the record.  */
+ 	    dh->nreloads = reload_count - 1;
+-
+-	  written = total = 0;
+ 	}
+       else
+ 	{
+ 	  /* We have no data.  This means we send the standard reply for this
+ 	     case.  */
+-	  written = total = sizeof (notfound);
++	  ssize_t total = sizeof (notfound);
+ 
+-	  if (fd != -1)
+-	    written = TEMP_FAILURE_RETRY (send (fd, &notfound, total,
+-						MSG_NOSIGNAL));
++	  if (fd != -1 &&
++	      TEMP_FAILURE_RETRY (send (fd, &notfound, total,
++					MSG_NOSIGNAL)) != total)
++	    all_written = false;
+ 
+ 	  dataset = mempool_alloc (db, sizeof (struct dataset) + req->key_len,
+ 				   1);
+@@ -152,7 +151,7 @@ cache_addhst (struct database_dyn *db, i
+ 		}
+ 
+ 	      (void) cache_add (req->type, &dataset->strdata, req->key_len,
+-				&dataset->head, true, db, owner);
++				&dataset->head, true, db, owner, he == NULL);
+ 
+ 	      pthread_rwlock_unlock (&db->lock);
+ 
+@@ -175,6 +174,7 @@ cache_addhst (struct database_dyn *db, i
+       char *key_copy = NULL;
+       char *cp;
+       size_t cnt;
++      ssize_t total;
+ 
+       /* Determine the number of aliases.  */
+       h_aliases_cnt = 0;
+@@ -191,7 +191,7 @@ cache_addhst (struct database_dyn *db, i
+ 
+       /* Determine the number of addresses.  */
+       h_addr_list_cnt = 0;
+-      for (cnt = 0; hst->h_addr_list[cnt]; ++cnt)
++      while (hst->h_addr_list[h_addr_list_cnt] != NULL)
+ 	++h_addr_list_cnt;
+ 
+       if (h_addr_list_cnt == 0)
+@@ -202,7 +202,6 @@ cache_addhst (struct database_dyn *db, i
+ 		+ h_name_len
+ 		+ h_aliases_cnt * sizeof (uint32_t)
+ 		+ h_addr_list_cnt * hst->h_length);
+-      written = total;
+ 
+       /* If we refill the cache, first assume the reconrd did not
+ 	 change.  Allocate memory on the cache since it is likely
+@@ -216,9 +215,9 @@ cache_addhst (struct database_dyn *db, i
+ 	 the current cache handling cannot handle and it is more than
+ 	 questionable whether it is worthwhile complicating the cache
+ 	 handling just for handling such a special case. */
+-      if (he == NULL && hst->h_addr_list[1] == NULL)
+-	dataset = (struct dataset *) mempool_alloc (db,
+-						    total + req->key_len, 1);
++      if (he == NULL && h_addr_list_cnt == 1)
++	dataset = (struct dataset *) mempool_alloc (db, total + req->key_len,
++						    1);
+ 
+       if (dataset == NULL)
+ 	{
+@@ -249,6 +248,9 @@ cache_addhst (struct database_dyn *db, i
+       dataset->resp.h_addr_list_cnt = h_addr_list_cnt;
+       dataset->resp.error = NETDB_SUCCESS;
+ 
++      /* Make sure there is no gap.  */
++      assert ((char *) (&dataset->resp.error + 1) == dataset->strdata);
++
+       cp = dataset->strdata;
+ 
+       cp = mempcpy (cp, hst->h_name, h_name_len);
+@@ -275,6 +277,8 @@ cache_addhst (struct database_dyn *db, i
+ 	 we explicitly add the name here.  */
+       key_copy = memcpy (cp, key, req->key_len);
+ 
++      assert ((char *) &dataset->resp + dataset->head.recsize == cp);
++
+       /* Now we can determine whether on refill we have to create a new
+ 	 record or not.  */
+       if (he != NULL)
+@@ -289,25 +293,32 @@ cache_addhst (struct database_dyn *db, i
+ 	      /* The data has not changed.  We will just bump the
+ 		 timeout value.  Note that the new record has been
+ 		 allocated on the stack and need not be freed.  */
++	      assert (h_addr_list_cnt == 1);
+ 	      dh->timeout = dataset->head.timeout;
+ 	      ++dh->nreloads;
+ 	    }
+ 	  else
+ 	    {
+-	      /* We have to create a new record.  Just allocate
+-		 appropriate memory and copy it.  */
+-	      struct dataset *newp
+-		= (struct dataset *) mempool_alloc (db, total + req->key_len, 1);
+-	      if (newp != NULL)
++	      if (h_addr_list_cnt == 1)
+ 		{
+-		  /* Adjust pointers into the memory block.  */
+-		  addresses = (char *) newp + (addresses - (char *) dataset);
+-		  aliases = (char *) newp + (aliases - (char *) dataset);
+-		  if (key_copy != NULL)
+-		    key_copy = (char *) newp + (key_copy - (char *) dataset);
+-
+-		  dataset = memcpy (newp, dataset, total + req->key_len);
+-		  alloca_used = false;
++		  /* We have to create a new record.  Just allocate
++		     appropriate memory and copy it.  */
++		  struct dataset *newp
++		    = (struct dataset *) mempool_alloc (db,
++							total + req->key_len,
++							1);
++		  if (newp != NULL)
++		    {
++		      /* Adjust pointers into the memory block.  */
++		      addresses = (char *) newp + (addresses
++						   - (char *) dataset);
++		      aliases = (char *) newp + (aliases - (char *) dataset);
++		      assert (key_copy != NULL);
++		      key_copy = (char *) newp + (key_copy - (char *) dataset);
++
++		      dataset = memcpy (newp, dataset, total + req->key_len);
++		      alloca_used = false;
++		    }
+ 		}
+ 
+ 	      /* Mark the old record as obsolete.  */
+@@ -331,20 +342,27 @@ cache_addhst (struct database_dyn *db, i
+ 		      <= (sizeof (struct database_pers_head)
+ 			  + db->head->module * sizeof (ref_t)
+ 			  + db->head->data_size));
+-	      written = sendfileall (fd, db->wr_fd,
+-				     (char *) &dataset->resp
+-				     - (char *) db->head, total);
++	      ssize_t written = sendfileall (fd, db->wr_fd,
++					     (char *) &dataset->resp
++					     - (char *) db->head,
++					     dataset->head.recsize);
++	      if (written != dataset->head.recsize)
++		{
+ # ifndef __ASSUME_SENDFILE
+-	      if (written == -1 && errno == ENOSYS)
+-		goto use_write;
++		  if (written == -1 && errno == ENOSYS)
++		    goto use_write;
+ # endif
++		  all_written = false;
++		}
+ 	    }
+ 	  else
+ # ifndef __ASSUME_SENDFILE
+ 	  use_write:
+ # endif
+ #endif
+-	    written = writeall (fd, &dataset->resp, total);
++	    if (writeall (fd, &dataset->resp, dataset->head.recsize)
++		!= dataset->head.recsize)
++	      all_written = false;
+ 	}
+ 
+       /* Add the record to the database.  But only if it has not been
+@@ -385,13 +403,13 @@ cache_addhst (struct database_dyn *db, i
+ 		  || req->type == GETHOSTBYADDRv6);
+ 
+ 	  (void) cache_add (req->type, key_copy, req->key_len,
+-			    &dataset->head, true, db, owner);
++			    &dataset->head, true, db, owner, he == NULL);
+ 
+ 	  pthread_rwlock_unlock (&db->lock);
+ 	}
+     }
+ 
+-  if (__builtin_expect (written != total, 0) && debug_level > 0)
++  if (__builtin_expect (!all_written, 0) && debug_level > 0)
+     {
+       char buf[256];
+       dbg_log (_("short write in %s: %s"),  __FUNCTION__,
+@@ -450,24 +468,15 @@ addhstbyX (struct database_dyn *db, int 
+ 	dbg_log (_("Reloading \"%s\" in hosts cache!"), (char *) str);
+     }
+ 
+-#if 0
+-  uid_t oldeuid = 0;
+-  if (db->secure)
+-    {
+-      oldeuid = geteuid ();
+-      pthread_seteuid_np (uid);
+-    }
+-#endif
+-
+   while (lookup (req->type, key, &resultbuf, buffer, buflen, &hst, &ttl) != 0
+ 	 && h_errno == NETDB_INTERNAL
+ 	 && (errval = errno) == ERANGE)
+     {
+-      char *old_buffer = buffer;
+       errno = 0;
+ 
+       if (__builtin_expect (buflen > 32768, 0))
+ 	{
++	  char *old_buffer = buffer;
+ 	  buflen *= 2;
+ 	  buffer = (char *) realloc (use_malloc ? buffer : NULL, buflen);
+ 	  if (buffer == NULL)
+@@ -492,11 +501,6 @@ addhstbyX (struct database_dyn *db, int 
+ 	buffer = (char *) extend_alloca (buffer, buflen, 2 * buflen);
+     }
+ 
+-#if 0
+-  if (db->secure)
+-    pthread_seteuid_np (oldeuid);
+-#endif
+-
+   cache_addhst (db, fd, req, key, hst, uid, he, dh,
+ 		h_errno == TRY_AGAIN ? errval : 0, ttl);
+ 
+--- libc/nscd/initgrcache.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/initgrcache.c	2009-02-16 08:47:30.000000000 -0500
+@@ -1,11 +1,12 @@
+ /* Cache handling for host lookup.
+-   Copyright (C) 2004, 2005, 2006 Free Software Foundation, Inc.
++   Copyright (C) 2004, 2005, 2006, 2008, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Ulrich Drepper <drepper@redhat.com>, 2004.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -109,7 +110,7 @@ addinitgroupsX (struct database_dyn *db,
+   bool all_tryagain = true;
+   bool any_success = false;
+ 
+-  /* This is temporary memory, we need not (ad must not) call
++  /* This is temporary memory, we need not (and must not) call
+      mempool_alloc.  */
+   // XXX This really should use alloca.  need to change the backends.
+   gid_t *groups = (gid_t *) malloc (size * sizeof (gid_t));
+@@ -227,7 +228,7 @@ addinitgroupsX (struct database_dyn *db,
+ 		}
+ 
+ 	      (void) cache_add (req->type, key_copy, req->key_len,
+-				&dataset->head, true, db, uid);
++				&dataset->head, true, db, uid, he == NULL);
+ 
+ 	      pthread_rwlock_unlock (&db->lock);
+ 
+@@ -240,7 +241,8 @@ addinitgroupsX (struct database_dyn *db,
+   else
+     {
+ 
+-      written = total = sizeof (struct dataset) + start * sizeof (int32_t);
++      written = total = (offsetof (struct dataset, strdata)
++			 + start * sizeof (int32_t));
+ 
+       /* If we refill the cache, first assume the reconrd did not
+ 	 change.  Allocate memory on the cache since it is likely
+@@ -296,6 +298,9 @@ addinitgroupsX (struct database_dyn *db,
+       /* Finally the user name.  */
+       memcpy (cp, key, req->key_len);
+ 
++      assert (cp == dataset->strdata + total - offsetof (struct dataset,
++							 strdata));
++
+       /* Now we can determine whether on refill we have to create a new
+ 	 record or not.  */
+       if (he != NULL)
+@@ -382,7 +387,7 @@ addinitgroupsX (struct database_dyn *db,
+ 	    }
+ 
+ 	  (void) cache_add (INITGROUPS, cp, req->key_len, &dataset->head, true,
+-			    db, uid);
++			    db, uid, he == NULL);
+ 
+ 	  pthread_rwlock_unlock (&db->lock);
+ 	}
+--- libc/nscd/nscd.c	2009-05-11 04:15:48.000000000 -0400
++++ libc/nscd/nscd.c	2009-05-11 06:32:37.000000000 -0400
+@@ -1,10 +1,11 @@
+-/* Copyright (c) 1998-2003, 2004, 2005, 2006 Free Software Foundation, Inc.
++/* Copyright (c) 1998-2008, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Thorsten Kukuk <kukuk@suse.de>, 1998.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -90,6 +91,9 @@ static int write_pid (const char *file);
+ static void print_version (FILE *stream, struct argp_state *state);
+ void (*argp_program_version_hook) (FILE *, struct argp_state *) = print_version;
+ 
++/* Function to print some extra text in the help message.  */
++static char *more_help (int key, const char *text, void *input);
++
+ /* Definitions of arguments for argp functions.  */
+ static const struct argp_option options[] =
+ {
+@@ -99,7 +103,7 @@ static const struct argp_option options[
+     N_("Do not fork and display messages on the current tty") },
+   { "nthreads", 't', N_("NUMBER"), 0, N_("Start NUMBER threads") },
+   { "shutdown", 'K', NULL, 0, N_("Shut the server down") },
+-  { "statistic", 'g', NULL, 0, N_("Print current configuration statistic") },
++  { "statistic", 'g', NULL, 0, N_("Print current configuration statistics") },
+   { "invalidate", 'i', N_("TABLE"), 0,
+     N_("Invalidate the specified cache") },
+   { "secure", 'S', N_("TABLE,yes"), OPTION_HIDDEN,
+@@ -116,7 +120,7 @@ static error_t parse_opt (int key, char 
+ /* Data structure to communicate with argp functions.  */
+ static struct argp argp =
+ {
+-  options, parse_opt, NULL, doc,
++  options, parse_opt, NULL, doc, NULL, more_help
+ };
+ 
+ /* The SIGHUP handler is extern to this file */
+@@ -305,18 +309,18 @@ parse_opt (int key, char *arg, struct ar
+ 	error (4, 0, _("Only root is allowed to use this option!"));
+       {
+ 	int sock = nscd_open_socket ();
+-	request_header req;
+-	ssize_t nbytes;
+ 
+ 	if (sock == -1)
+ 	  exit (EXIT_FAILURE);
+ 
++	request_header req;
+ 	req.version = NSCD_VERSION;
+ 	req.type = SHUTDOWN;
+ 	req.key_len = 0;
+-	nbytes = TEMP_FAILURE_RETRY (send (sock, &req,
+-					   sizeof (request_header),
+-					   MSG_NOSIGNAL));
++
++	ssize_t nbytes = TEMP_FAILURE_RETRY (send (sock, &req,
++						   sizeof (request_header),
++						   MSG_NOSIGNAL));
+ 	close (sock);
+ 	exit (nbytes != sizeof (request_header) ? EXIT_FAILURE : EXIT_SUCCESS);
+       }
+@@ -335,28 +339,35 @@ parse_opt (int key, char *arg, struct ar
+ 	  if (sock == -1)
+ 	    exit (EXIT_FAILURE);
+ 
+-	  request_header req;
+-	  if (strcmp (arg, "passwd") == 0)
+-	    req.key_len = sizeof "passwd";
+-	  else if (strcmp (arg, "group") == 0)
+-	    req.key_len = sizeof "group";
+-	  else if (strcmp (arg, "hosts") == 0)
+-	    req.key_len = sizeof "hosts";
+-	  else
+-	    return ARGP_ERR_UNKNOWN;
+-
+-	  req.version = NSCD_VERSION;
+-	  req.type = INVALIDATE;
++	  dbtype cnt;
++	  for (cnt = pwddb; cnt < lastdb; ++cnt)
++	    if (strcmp (arg, dbnames[cnt]) == 0)
++	      break;
+ 
+-	  struct iovec iov[2];
+-	  iov[0].iov_base = &req;
+-	  iov[0].iov_len = sizeof (req);
+-	  iov[1].iov_base = arg;
+-	  iov[1].iov_len = req.key_len;
++	  if (cnt == lastdb)
++	    {
++	      argp_error (state, _("'%s' is not a known database"), arg);
++	      return EINVAL;
++	    }
+ 
+-	  ssize_t nbytes = TEMP_FAILURE_RETRY (writev (sock, iov, 2));
++	  size_t arg_len = strlen (arg) + 1;
++	  struct
++	  {
++	    request_header req;
++	    char arg[arg_len];
++	  } reqdata;
++
++	  reqdata.req.key_len = strlen (arg) + 1;
++	  reqdata.req.version = NSCD_VERSION;
++	  reqdata.req.type = INVALIDATE;
++	  memcpy (reqdata.arg, arg, arg_len);
++
++	  ssize_t nbytes = TEMP_FAILURE_RETRY (send (sock, &reqdata,
++						     sizeof (request_header)
++						     + arg_len,
++						     MSG_NOSIGNAL));
+ 
+-	  if (nbytes != iov[0].iov_len + iov[1].iov_len)
++	  if (nbytes != sizeof (request_header) + arg_len)
+ 	    {
+ 	      int err = errno;
+ 	      close (sock);
+@@ -397,6 +408,23 @@ parse_opt (int key, char *arg, struct ar
+   return 0;
+ }
+ 
++/* Print bug-reporting information in the help message.  */
++static char *
++more_help (int key, const char *text, void *input)
++{
++  switch (key)
++    {
++    case ARGP_KEY_HELP_EXTRA:
++      /* We print some extra information.  */
++      return strdup (gettext ("\
++For bug reporting instructions, please see:\n\
++<http://www.gnu.org/software/libc/bugs.html>.\n"));
++    default:
++      break;
++    }
++  return (char *) text;
++}
++
+ /* Print the version information.  */
+ static void
+ print_version (FILE *stream, struct argp_state *state)
+@@ -406,7 +434,7 @@ print_version (FILE *stream, struct argp
+ Copyright (C) %s Free Software Foundation, Inc.\n\
+ This is free software; see the source for copying conditions.  There is NO\n\
+ warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\
+-"), "2006");
++"), "2009");
+   fprintf (stream, gettext ("Written by %s.\n"),
+ 	   "Thorsten Kukuk and Ulrich Drepper");
+ }
+--- libc/nscd/nscd-client.h	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/nscd-client.h	2009-05-11 05:06:41.000000000 -0400
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 1998, 1999, 2000, 2003, 2004, 2005, 2006
++/* Copyright (c) 1998, 1999, 2000, 2003, 2004, 2005, 2006, 2007
+    Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Thorsten Kukuk <kukuk@suse.de>, 1998.
+@@ -44,6 +44,9 @@
+ /* Path for the configuration file.  */
+ #define _PATH_NSCDCONF	 "/etc/nscd.conf"
+ 
++/* Maximu allowed length for the key.  */
++#define MAXKEYLEN 1024
++
+ 
+ /* Available services.  */
+ typedef enum
+@@ -56,7 +59,6 @@ typedef enum
+   GETHOSTBYNAMEv6,
+   GETHOSTBYADDR,
+   GETHOSTBYADDRv6,
+-  LASTDBREQ = GETHOSTBYADDRv6,
+   SHUTDOWN,		/* Shut the server down.  */
+   GETSTAT,		/* Get the server statistic.  */
+   INVALIDATE,           /* Invalidate one special cache.  */
+--- libc/nscd/nscd_conf.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/nscd_conf.c	2009-05-11 05:11:56.000000000 -0400
+@@ -1,10 +1,11 @@
+-/* Copyright (c) 1998,2000,2003,2004,2005,2006 Free Software Foundation, Inc.
++/* Copyright (c) 1998, 2000, 2003-2007, 2008 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Thorsten Kukuk <kukuk@suse.de>, 1998.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -37,7 +38,7 @@ extern char *xstrdup (const char *s);
+ 
+ 
+ /* Names of the databases.  */
+-const char *dbnames[lastdb] =
++const char *const dbnames[lastdb] =
+ {
+   [pwddb] = "passwd",
+   [grpdb] = "group",
+@@ -52,7 +53,7 @@ find_db (const char *name)
+     if (strcmp (name, dbnames[cnt]) == 0)
+       return cnt;
+ 
+-  error (0, 0, _("database %s is not supported\n"), name);
++  error (0, 0, _("database %s is not supported"), name);
+   return -1;
+ }
+ 
+--- libc/nscd/nscd.h	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/nscd.h	2009-05-11 05:12:45.000000000 -0400
+@@ -1,5 +1,4 @@
+-/* Copyright (c) 1998, 1999, 2000, 2001, 2003, 2004, 2005, 2006
+-   Free Software Foundation, Inc.
++/* Copyright (c) 1998-2001, 2003-2008, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Thorsten Kukuk <kukuk@suse.de>, 1998.
+ 
+@@ -66,14 +65,20 @@ typedef enum
+ struct database_dyn
+ {
+   pthread_rwlock_t lock;
+-  pthread_mutex_t prunelock;
++  pthread_cond_t prune_cond;
++  pthread_mutex_t prune_lock;
++  pthread_mutex_t prune_run_lock;
++  time_t wakeup_time;
+ 
+   int enabled;
+   int check_file;
++  int inotify_descr;
++  int clear_cache;
+   int persistent;
+   int shared;
+   int propagate;
+-  const char filename[12];
++  int reset_res;
++  const char filename[16];
+   const char *db_filename;
+   time_t file_mtime;
+   size_t suggested_module;
+@@ -115,19 +120,24 @@ struct database_dyn
+ /* Number of bytes of data we initially reserve for each hash table bucket.  */
+ #define DEFAULT_DATASIZE_PER_BUCKET 1024
+ 
++/* Default module of hash table.  */
++#define DEFAULT_SUGGESTED_MODULE 211
++
++
++/* Number of seconds between two cache pruning runs if we do not have
++   better information when it is really needed.  */
++#define CACHE_PRUNE_INTERVAL	15
++
+ 
+ /* Global variables.  */
+ extern struct database_dyn dbs[lastdb] attribute_hidden;
+-extern const char *dbnames[lastdb];
+-extern const char *serv2str[LASTREQ];
++extern const char *const dbnames[lastdb];
++extern const char *const serv2str[LASTREQ];
+ 
+ extern const struct iovec pwd_iov_disabled;
+ extern const struct iovec grp_iov_disabled;
+ extern const struct iovec hst_iov_disabled;
+ 
+-/* Default module of hash table.  */
+-#define DEFAULT_SUGGESTED_MODULE 211
+-
+ 
+ /* Initial number of threads to run.  */
+ extern int nthreads;
+@@ -195,8 +205,9 @@ extern struct datahead *cache_search (re
+ 				      uid_t owner);
+ extern int cache_add (int type, const void *key, size_t len,
+ 		      struct datahead *packet, bool first,
+-		      struct database_dyn *table, uid_t owner);
+-extern void prune_cache (struct database_dyn *table, time_t now, int fd);
++		      struct database_dyn *table, uid_t owner,
++		      bool prune_wakeup);
++extern time_t prune_cache (struct database_dyn *table, time_t now, int fd);
+ 
+ /* pwdcache.c */
+ extern void addpwbyname (struct database_dyn *db, int fd, request_header *req,
+@@ -256,7 +267,7 @@ extern void gc (struct database_dyn *db)
+ 
+ 
+ /* nscd_setup_thread.c */
+-extern void setup_thread (struct database_dyn *db);
++extern int setup_thread (struct database_dyn *db);
+ 
+ 
+ /* Special version of TEMP_FAILURE_RETRY for functions returning error
+--- libc/nscd/nscd_helper.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/nscd_helper.c	2009-04-27 04:40:08.000000000 -0400
+@@ -1,4 +1,4 @@
+-/* Copyright (C) 1998-2002,2003,2004,2005,2006 Free Software Foundation, Inc.
++/* Copyright (C) 1998-2007, 2008, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
+ 
+@@ -33,10 +33,50 @@
+ #include <sys/un.h>
+ #include <not-cancel.h>
+ #include <nis/rpcsvc/nis.h>
++#include <kernel-features.h>
+ 
+ #include "nscd-client.h"
+ 
+ 
++/* Extra time we wait if the socket is still receiving data.  This
++   value is in milliseconds.  Note that the other side is nscd on the
++   local machine and it is already transmitting data.  So the wait
++   time need not be long.  */
++#define EXTRA_RECEIVE_TIME 200
++
++
++static int
++wait_on_socket (int sock, long int usectmo)
++{
++  struct pollfd fds[1];
++  fds[0].fd = sock;
++  fds[0].events = POLLIN | POLLERR | POLLHUP;
++  int n = __poll (fds, 1, usectmo);
++  if (n == -1 && __builtin_expect (errno == EINTR, 0))
++    {
++      /* Handle the case where the poll() call is interrupted by a
++	 signal.  We cannot just use TEMP_FAILURE_RETRY since it might
++	 lead to infinite loops.  */
++      struct timeval now;
++      (void) __gettimeofday (&now, NULL);
++      long int end = now.tv_sec * 1000 + usectmo + (now.tv_usec + 500) / 1000;
++      long int timeout = usectmo;
++      while (1)
++	{
++	  n = __poll (fds, 1, timeout);
++	  if (n != -1 || errno != EINTR)
++	    break;
++
++	  /* Recompute the timeout time.  */
++	  (void) __gettimeofday (&now, NULL);
++	  timeout = end - (now.tv_sec * 1000 + (now.tv_usec + 500) / 1000);
++	}
++    }
++
++  return n;
++}
++
++
+ ssize_t
+ __readall (int fd, void *buf, size_t len)
+ {
+@@ -44,9 +84,17 @@ __readall (int fd, void *buf, size_t len
+   ssize_t ret;
+   do
+     {
++    again:
+       ret = TEMP_FAILURE_RETRY (__read (fd, buf, n));
+       if (ret <= 0)
+-	break;
++	{
++	  if (__builtin_expect (ret < 0 && errno == EAGAIN, 0)
++	      /* The socket is still receiving data.  Wait a bit more.  */
++	      && wait_on_socket (fd, EXTRA_RECEIVE_TIME) > 0)
++	    goto again;
++
++	  break;
++	}
+       buf = (char *) buf + ret;
+       n -= ret;
+     }
+@@ -60,7 +108,15 @@ __readvall (int fd, const struct iovec *
+ {
+   ssize_t ret = TEMP_FAILURE_RETRY (__readv (fd, iov, iovcnt));
+   if (ret <= 0)
+-    return ret;
++    {
++      if (__builtin_expect (ret == 0 || errno != EAGAIN, 1))
++	/* A genuine error or no data to read.  */
++	return ret;
++
++      /* The data has not all yet been received.  Do as if we have not
++	 read anything yet.  */
++      ret = 0;
++    }
+ 
+   size_t total = 0;
+   for (int i = 0; i < iovcnt; ++i)
+@@ -82,9 +138,17 @@ __readvall (int fd, const struct iovec *
+ 	    }
+ 	  iovp->iov_base = (char *) iovp->iov_base + r;
+ 	  iovp->iov_len -= r;
++	again:
+ 	  r = TEMP_FAILURE_RETRY (__readv (fd, iovp, iovcnt));
+ 	  if (r <= 0)
+-	    break;
++	    {
++	      if (__builtin_expect (r < 0 && errno == EAGAIN, 0)
++		  /* The socket is still receiving data.  Wait a bit more.  */
++		  && wait_on_socket (fd, EXTRA_RECEIVE_TIME) > 0)
++		goto again;
++
++	      break;
++	    }
+ 	  ret += r;
+ 	}
+       while (ret < total);
+@@ -96,16 +160,45 @@ __readvall (int fd, const struct iovec *
+ 
+ 
+ static int
+-open_socket (void)
++open_socket (request_type type, const char *key, size_t keylen)
+ {
+-  int sock = __socket (PF_UNIX, SOCK_STREAM, 0);
++  int sock;
++
++#ifdef SOCK_CLOEXEC
++# ifndef __ASSUME_SOCK_CLOEXEC
++  if (__have_sock_cloexec >= 0)
++# endif
++    {
++      sock = __socket (PF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
++# ifndef __ASSUME_SOCK_CLOEXEC
++      if (__have_sock_cloexec == 0)
++	__have_sock_cloexec = sock != -1 || errno != EINVAL ? 1 : -1;
++# endif
++    }
++#endif
++#ifndef __ASSUME_SOCK_CLOEXEC
++# ifdef SOCK_CLOEXEC
++  if (__have_sock_cloexec < 0)
++# endif
++    sock = __socket (PF_UNIX, SOCK_STREAM, 0);
++#endif
+   if (sock < 0)
+     return -1;
+ 
+-  /* Make socket non-blocking.  */
+-  int fl = __fcntl (sock, F_GETFL);
+-  if (fl != -1)
+-    __fcntl (sock, F_SETFL, fl | O_NONBLOCK);
++  struct
++  {
++    request_header req;
++    char key[keylen];
++  } reqdata;
++  size_t real_sizeof_reqdata = sizeof (request_header) + keylen;
++
++#ifndef __ASSUME_SOCK_CLOEXEC
++# ifdef SOCK_NONBLOCK
++  if (__have_sock_cloexec < 0)
++# endif
++    /* Make socket non-blocking.  */
++    __fcntl (sock, F_SETFL, O_RDWR | O_NONBLOCK);
++#endif
+ 
+   struct sockaddr_un sun;
+   sun.sun_family = AF_UNIX;
+@@ -114,13 +207,56 @@ open_socket (void)
+       && errno != EINPROGRESS)
+     goto out;
+ 
+-  struct pollfd fds[1];
+-  fds[0].fd = sock;
+-  fds[0].events = POLLOUT | POLLERR | POLLHUP;
+-  if (__poll (fds, 1, 5 * 1000) > 0)
+-    /* Success.  We do not check for success of the connect call here.
+-       If it failed, the following operations will fail.  */
+-    return sock;
++  reqdata.req.version = NSCD_VERSION;
++  reqdata.req.type = type;
++  reqdata.req.key_len = keylen;
++
++  memcpy (reqdata.key, key, keylen);
++
++  bool first_try = true;
++  struct timeval tvend;
++  /* Fake initializing tvend.  */
++  asm ("" : "=m" (tvend));
++  while (1)
++    {
++#ifndef MSG_NOSIGNAL
++# define MSG_NOSIGNAL 0
++#endif
++      ssize_t wres = TEMP_FAILURE_RETRY (__send (sock, &reqdata,
++						 real_sizeof_reqdata,
++						 MSG_NOSIGNAL));
++      if (__builtin_expect (wres == (ssize_t) real_sizeof_reqdata, 1))
++	/* We managed to send the request.  */
++	return sock;
++
++      if (wres != -1 || errno != EAGAIN)
++	/* Something is really wrong, no chance to continue.  */
++	break;
++
++      /* The daemon is busy wait for it.  */
++      int to;
++      struct timeval now;
++      (void) __gettimeofday (&now, NULL);
++      if (first_try)
++	{
++	  tvend.tv_usec = now.tv_usec;
++	  tvend.tv_sec = now.tv_sec + 5;
++	  to = 5 * 1000;
++	  first_try = false;
++	}
++      else
++	to = ((tvend.tv_sec - now.tv_sec) * 1000
++	      + (tvend.tv_usec - now.tv_usec) / 1000);
++
++      struct pollfd fds[1];
++      fds[0].fd = sock;
++      fds[0].events = POLLOUT | POLLERR | POLLHUP;
++      if (__poll (fds, 1, to) <= 0)
++	/* The connection timed out or broke down.  */
++	break;
++
++      /* We try to write again.  */
++    }
+ 
+  out:
+   close_not_cancel_no_status (sock);
+@@ -138,36 +274,6 @@ __nscd_unmap (struct mapped_database *ma
+ }
+ 
+ 
+-static int
+-wait_on_socket (int sock)
+-{
+-  struct pollfd fds[1];
+-  fds[0].fd = sock;
+-  fds[0].events = POLLIN | POLLERR | POLLHUP;
+-  int n = __poll (fds, 1, 5 * 1000);
+-  if (n == -1 && __builtin_expect (errno == EINTR, 0))
+-    {
+-      /* Handle the case where the poll() call is interrupted by a
+-	 signal.  We cannot just use TEMP_FAILURE_RETRY since it might
+-	 lead to infinite loops.  */
+-      struct timeval now;
+-      (void) __gettimeofday (&now, NULL);
+-      long int end = (now.tv_sec + 5) * 1000 + (now.tv_usec + 500) / 1000;
+-      while (1)
+-	{
+-	  long int timeout = end - (now.tv_sec * 1000
+-				    + (now.tv_usec + 500) / 1000);
+-	  n = __poll (fds, 1, timeout);
+-	  if (n != -1 || errno != EINTR)
+-	    break;
+-	  (void) __gettimeofday (&now, NULL);
+-	}
+-    }
+-
+-  return n;
+-}
+-
+-
+ /* Try to get a file descriptor for the shared meory segment
+    containing the database.  */
+ static struct mapped_database *
+@@ -180,47 +286,28 @@ get_mapping (request_type type, const ch
+   int saved_errno = errno;
+ 
+   int mapfd = -1;
++  char resdata[keylen];
+ 
+-  /* Send the request.  */
+-  struct
+-  {
+-    request_header req;
+-    char key[keylen];
+-  } reqdata;
+-  size_t real_sizeof_reqdata = sizeof (request_header) + keylen;
+-
+-  int sock = open_socket ();
++  /* Open a socket and send the request.  */
++  int sock = open_socket (type, key, keylen);
+   if (sock < 0)
+     goto out;
+ 
+-  reqdata.req.version = NSCD_VERSION;
+-  reqdata.req.type = type;
+-  reqdata.req.key_len = keylen;
+-  memcpy (reqdata.key, key, keylen);
+-
+-# ifndef MSG_NOSIGNAL
+-#  define MSG_NOSIGNAL 0
+-# endif
+-  if (__builtin_expect (TEMP_FAILURE_RETRY (__send (sock, &reqdata,
+-						    real_sizeof_reqdata,
+-						    MSG_NOSIGNAL))
+-			!= real_sizeof_reqdata, 0))
+-    /* We cannot even write the request.  */
+-    goto out_close2;
+-
+   /* Room for the data sent along with the file descriptor.  We expect
+      the key name back.  */
+-# define resdata reqdata.key
+-  struct iovec iov[1];
++  uint64_t mapsize;
++  struct iovec iov[2];
+   iov[0].iov_base = resdata;
+   iov[0].iov_len = keylen;
++  iov[1].iov_base = &mapsize;
++  iov[1].iov_len = sizeof (mapsize);
+ 
+   union
+   {
+     struct cmsghdr hdr;
+     char bytes[CMSG_SPACE (sizeof (int))];
+   } buf;
+-  struct msghdr msg = { .msg_iov = iov, .msg_iovlen = 1,
++  struct msghdr msg = { .msg_iov = iov, .msg_iovlen = 2,
+ 			.msg_control = buf.bytes,
+ 			.msg_controllen = sizeof (buf) };
+   struct cmsghdr *cmsg = CMSG_FIRSTHDR (&msg);
+@@ -231,72 +318,84 @@ get_mapping (request_type type, const ch
+ 
+   /* This access is well-aligned since BUF is correctly aligned for an
+      int and CMSG_DATA preserves this alignment.  */
+-  *(int *) CMSG_DATA (cmsg) = -1;
++  memset (CMSG_DATA (cmsg), '\xff', sizeof (int));
+ 
+   msg.msg_controllen = cmsg->cmsg_len;
+ 
+-  if (wait_on_socket (sock) <= 0)
++  if (wait_on_socket (sock, 5 * 1000) <= 0)
+     goto out_close2;
+ 
+-  if (__builtin_expect (TEMP_FAILURE_RETRY (__recvmsg (sock, &msg, 0))
+-			!= keylen, 0))
+-    goto out_close2;
++# ifndef MSG_CMSG_CLOEXEC
++#  define MSG_CMSG_CLOEXEC 0
++# endif
++  ssize_t n = TEMP_FAILURE_RETRY (__recvmsg (sock, &msg, MSG_CMSG_CLOEXEC));
+ 
+   if (__builtin_expect (CMSG_FIRSTHDR (&msg) == NULL
+ 			|| (CMSG_FIRSTHDR (&msg)->cmsg_len
+ 			    != CMSG_LEN (sizeof (int))), 0))
+     goto out_close2;
+ 
+-  mapfd = *(int *) CMSG_DATA (cmsg);
+-
+-  struct stat64 st;
+-  if (__builtin_expect (strcmp (resdata, key) != 0, 0)
+-      || __builtin_expect (fstat64 (mapfd, &st) != 0, 0)
+-      || __builtin_expect (st.st_size < sizeof (struct database_pers_head), 0))
+-    goto out_close;
++  int *ip = (void *) CMSG_DATA (cmsg);
++  mapfd = *ip;
+ 
+-  struct database_pers_head head;
+-  if (__builtin_expect (TEMP_FAILURE_RETRY (__pread (mapfd, &head,
+-						     sizeof (head), 0))
+-			!= sizeof (head), 0))
++  if (__builtin_expect (n != keylen && n != keylen + sizeof (mapsize), 0))
+     goto out_close;
+ 
+-  if (__builtin_expect (head.version != DB_VERSION, 0)
+-      || __builtin_expect (head.header_size != sizeof (head), 0)
+-         /* Catch some misconfiguration.  The server should catch
+-            them now but some older versions did not.  */
+-      || __builtin_expect (head.module == 0, 0)
+-      /* This really should not happen but who knows, maybe the update
+-	 thread got stuck.  */
+-      || __builtin_expect (! head.nscd_certainly_running
+-			   && head.timestamp + MAPPING_TIMEOUT < time (NULL),
+-			   0))
++  if (__builtin_expect (strcmp (resdata, key) != 0, 0))
+     goto out_close;
+ 
+-  size_t size = (sizeof (head) + roundup (head.module * sizeof (ref_t), ALIGN)
+-		 + head.data_size);
++  if (__builtin_expect (n == keylen, 0))
++    {
++      struct stat64 st;
++      if (__builtin_expect (fstat64 (mapfd, &st) != 0, 0)
++	  || __builtin_expect (st.st_size < sizeof (struct database_pers_head),
++			       0))
++	goto out_close;
+ 
+-  if (__builtin_expect (st.st_size < size, 0))
+-    goto out_close;
++      mapsize = st.st_size;
++    }
+ 
+   /* The file is large enough, map it now.  */
+-  void *mapping = __mmap (NULL, size, PROT_READ, MAP_SHARED, mapfd, 0);
++  void *mapping = __mmap (NULL, mapsize, PROT_READ, MAP_SHARED, mapfd, 0);
+   if (__builtin_expect (mapping != MAP_FAILED, 1))
+     {
+-      /* Allocate a record for the mapping.  */
+-      struct mapped_database *newp = malloc (sizeof (*newp));
+-      if (newp == NULL)
++      /* Check whether the database is correct and up-to-date.  */
++      struct database_pers_head *head = mapping;
++
++      if (__builtin_expect (head->version != DB_VERSION, 0)
++	  || __builtin_expect (head->header_size != sizeof (*head), 0)
++	  /* Catch some misconfiguration.  The server should catch
++	     them now but some older versions did not.  */
++	  || __builtin_expect (head->module == 0, 0)
++	  /* This really should not happen but who knows, maybe the update
++	     thread got stuck.  */
++	  || __builtin_expect (! head->nscd_certainly_running
++			       && (head->timestamp + MAPPING_TIMEOUT
++				   < time (NULL)), 0))
+ 	{
+-	  /* Ugh, after all we went through the memory allocation failed.  */
+-	  __munmap (mapping, size);
++	out_unmap:
++	  __munmap (mapping, mapsize);
+ 	  goto out_close;
+ 	}
+ 
++      size_t size = (sizeof (*head) + roundup (head->module * sizeof (ref_t),
++					       ALIGN)
++		     + head->data_size);
++
++      if (__builtin_expect (mapsize < size, 0))
++	goto out_unmap;
++
++      /* Allocate a record for the mapping.  */
++      struct mapped_database *newp = malloc (sizeof (*newp));
++      if (newp == NULL)
++	/* Ugh, after all we went through the memory allocation failed.  */
++	goto out_unmap;
++
+       newp->head = mapping;
+-      newp->data = ((char *) mapping + head.header_size
+-		    + roundup (head.module * sizeof (ref_t), ALIGN));
++      newp->data = ((char *) mapping + head->header_size
++		    + roundup (head->module * sizeof (ref_t), ALIGN));
+       newp->mapsize = size;
+-      newp->datasize = head.data_size;
++      newp->datasize = head->data_size;
+       /* Set counter to 1 to show it is usable.  */
+       newp->counter = 1;
+ 
+@@ -378,7 +477,10 @@ __nscd_cache_search (request_type type, 
+   unsigned long int hash = __nis_hash (key, keylen) % mapped->head->module;
+   size_t datasize = mapped->datasize;
+ 
+-  ref_t work = mapped->head->array[hash];
++  ref_t trail = mapped->head->array[hash];
++  ref_t work = trail;
++  int tick = 0;
++
+   while (work != ENDREF && work + sizeof (struct hashentry) <= datasize)
+     {
+       struct hashentry *here = (struct hashentry *) (mapped->data + work);
+@@ -416,6 +518,23 @@ __nscd_cache_search (request_type type, 
+ 	}
+ 
+       work = here->next;
++      /* Prevent endless loops.  This should never happen but perhaps
++	 the database got corrupted, accidentally or deliberately.  */
++      if (work == trail)
++	break;
++      if (tick)
++	{
++	  struct hashentry *trailelem;
++	  trailelem = (struct hashentry *) (mapped->data + trail);
++
++#ifndef _STRING_ARCH_unaligned
++	  /* We have to redo the checks.  Maybe the data changed.  */
++	  if ((uintptr_t) trailelem & (__alignof__ (*trailelem) - 1))
++	    return NULL;
++#endif
++	  trail = trailelem->next;
++	}
++      tick = 1 - tick;
+     }
+ 
+   return NULL;
+@@ -427,28 +546,22 @@ int
+ __nscd_open_socket (const char *key, size_t keylen, request_type type,
+ 		    void *response, size_t responselen)
+ {
++  /* This should never happen and it is something the nscd daemon
++     enforces, too.  He it helps to limit the amount of stack
++     used.  */
++  if (keylen > MAXKEYLEN)
++    return -1;
++
+   int saved_errno = errno;
+ 
+-  int sock = open_socket ();
++  int sock = open_socket (type, key, keylen);
+   if (sock >= 0)
+     {
+-      request_header req;
+-      req.version = NSCD_VERSION;
+-      req.type = type;
+-      req.key_len = keylen;
+-
+-      struct iovec vec[2];
+-      vec[0].iov_base = &req;
+-      vec[0].iov_len = sizeof (request_header);
+-      vec[1].iov_base = (void *) key;
+-      vec[1].iov_len = keylen;
+-
+-      ssize_t nbytes = TEMP_FAILURE_RETRY (__writev (sock, vec, 2));
+-      if (nbytes == (ssize_t) (sizeof (request_header) + keylen)
+-	  /* Wait for data.  */
+-	  && wait_on_socket (sock) > 0)
++      /* Wait for data.  */
++      if (wait_on_socket (sock, 5 * 1000) > 0)
+ 	{
+-	  nbytes = TEMP_FAILURE_RETRY (__read (sock, response, responselen));
++	  ssize_t nbytes = TEMP_FAILURE_RETRY (__read (sock, response,
++						       responselen));
+ 	  if (nbytes == (ssize_t) responselen)
+ 	    return sock;
+ 	}
+--- libc/nscd/nscd_setup_thread.c	2005-12-14 04:54:38.000000000 -0500
++++ libc/nscd/nscd_setup_thread.c	2007-12-10 03:05:34.000000000 -0500
+@@ -4,8 +4,9 @@
+    Contributed by Ulrich Drepper <drepper@redhat.com>, 2004.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -19,8 +20,9 @@
+ #include <nscd.h>
+ 
+ 
+-void
++int
+ setup_thread (struct database_dyn *db)
+ {
+   /* Nothing.  */
++  return 0;
+ }
+--- libc/nscd/pwdcache.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/pwdcache.c	2009-02-16 08:47:30.000000000 -0500
+@@ -1,11 +1,12 @@
+ /* Cache handling for passwd lookup.
+-   Copyright (C) 1998-2005, 2006 Free Software Foundation, Inc.
++   Copyright (C) 1998-2008, 2009 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -150,7 +151,7 @@ cache_addpw (struct database_dyn *db, in
+ 		}
+ 
+ 	      (void) cache_add (req->type, key_copy, req->key_len,
+-				&dataset->head, true, db, owner);
++				&dataset->head, true, db, owner, he == NULL);
+ 
+ 	      pthread_rwlock_unlock (&db->lock);
+ 
+@@ -179,7 +180,8 @@ cache_addpw (struct database_dyn *db, in
+       n = snprintf (buf, buf_len, "%d%c%n%s", pwd->pw_uid, '\0',
+ 		    &key_offset, (char *) key) + 1;
+ 
+-      written = total = (sizeof (struct dataset) + pw_name_len + pw_passwd_len
++      written = total = (offsetof (struct dataset, strdata)
++			 + pw_name_len + pw_passwd_len
+ 			 + pw_gecos_len + pw_dir_len + pw_shell_len);
+ 
+       /* If we refill the cache, first assume the reconrd did not
+@@ -236,14 +238,17 @@ cache_addpw (struct database_dyn *db, in
+       char *key_copy = cp + key_offset;
+       assert (key_copy == (char *) rawmemchr (cp, '\0') + 1);
+ 
++      assert (cp == dataset->strdata + total - offsetof (struct dataset,
++							 strdata));
++
+       /* Now we can determine whether on refill we have to create a new
+ 	 record or not.  */
+       if (he != NULL)
+ 	{
+ 	  assert (fd == -1);
+ 
+-	  if (total + n == dh->allocsize
+-	      && total - offsetof (struct dataset, resp) == dh->recsize
++	  if (dataset->head.allocsize == dh->allocsize
++	      && dataset->head.recsize == dh->recsize
+ 	      && memcmp (&dataset->resp, dh->data,
+ 			 dh->allocsize - offsetof (struct dataset, resp)) == 0)
+ 	    {
+@@ -331,7 +336,7 @@ cache_addpw (struct database_dyn *db, in
+ 	  if (req->type == GETPWBYUID)
+ 	    {
+ 	      if (cache_add (GETPWBYUID, cp, key_offset, &dataset->head, true,
+-			     db, owner) < 0)
++			     db, owner, he == NULL) < 0)
+ 		goto out;
+ 
+ 	      first = false;
+@@ -340,7 +345,7 @@ cache_addpw (struct database_dyn *db, in
+ 	  else if (strcmp (key_copy, dataset->strdata) != 0)
+ 	    {
+ 	      if (cache_add (GETPWBYNAME, key_copy, key_len + 1,
+-			     &dataset->head, true, db, owner) < 0)
++			     &dataset->head, true, db, owner, he == NULL) < 0)
+ 		goto out;
+ 
+ 	      first = false;
+@@ -350,11 +355,12 @@ cache_addpw (struct database_dyn *db, in
+ 	  if ((req->type == GETPWBYNAME || db->propagate)
+ 	      && __builtin_expect (cache_add (GETPWBYNAME, dataset->strdata,
+ 					      pw_name_len, &dataset->head,
+-					      first, db, owner) == 0, 1))
++					      first, db, owner, he == NULL)
++				   == 0, 1))
+ 	    {
+ 	      if (req->type == GETPWBYNAME && db->propagate)
+ 		(void) cache_add (GETPWBYUID, cp, key_offset, &dataset->head,
+-				  false, db, owner);
++				  false, db, owner, false);
+ 	    }
+ 
+ 	out:
+@@ -413,23 +419,14 @@ addpwbyX (struct database_dyn *db, int f
+ 	dbg_log (_("Reloading \"%s\" in password cache!"), keystr);
+     }
+ 
+-#if 0
+-  uid_t oldeuid = 0;
+-  if (db->secure)
+-    {
+-      oldeuid = geteuid ();
+-      pthread_seteuid_np (c_uid);
+-    }
+-#endif
+-
+   while (lookup (req->type, key, &resultbuf, buffer, buflen, &pwd) != 0
+ 	 && (errval = errno) == ERANGE)
+     {
+-      char *old_buffer = buffer;
+       errno = 0;
+ 
+       if (__builtin_expect (buflen > 32768, 0))
+ 	{
++	  char *old_buffer = buffer;
+ 	  buflen *= 2;
+ 	  buffer = (char *) realloc (use_malloc ? buffer : NULL, buflen);
+ 	  if (buffer == NULL)
+@@ -454,11 +451,6 @@ addpwbyX (struct database_dyn *db, int f
+ 	buffer = (char *) extend_alloca (buffer, buflen, 2 * buflen);
+     }
+ 
+-#if 0
+-  if (db->secure)
+-    pthread_seteuid_np (oldeuid);
+-#endif
+-
+   /* Add the entry to the cache.  */
+   cache_addpw (db, fd, req, keystr, pwd, c_uid, he, dh, errval);
+ 
+--- libc/nscd/selinux.c	2009-05-11 04:15:49.000000000 -0400
++++ libc/nscd/selinux.c	2009-05-11 05:02:03.000000000 -0400
+@@ -1,5 +1,5 @@
+ /* SELinux access controls for nscd.
+-   Copyright (C) 2004, 2005, 2006 Free Software Foundation, Inc.
++   Copyright (C) 2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+    Contributed by Matthew Rickard <mjricka@epoch.ncsc.mil>, 2004.
+ 
+@@ -175,7 +175,7 @@ preserve_capabilities (void)
+     }
+ 
+   cap_t tmp_caps = cap_init ();
+-  cap_t new_caps;
++  cap_t new_caps = NULL;
+   if (tmp_caps != NULL)
+     new_caps = cap_init ();
+ 
+@@ -206,7 +206,7 @@ preserve_capabilities (void)
+   if (__builtin_expect (res != 0, 0))
+     {
+       cap_free (new_caps);
+-      dbg_log (_("Failed to drop capabilities\n"));
++      dbg_log (_("Failed to drop capabilities"));
+       error (EXIT_FAILURE, 0, _("cap_set_proc failed"));
+     }
+ 
+--- libc/sysdeps/unix/sysv/linux/nscd_setup_thread.c	2005-12-07 00:47:26.000000000 -0500
++++ libc/sysdeps/unix/sysv/linux/nscd_setup_thread.c	2007-12-10 03:05:36.000000000 -0500
+@@ -4,8 +4,9 @@
+    Contributed by Ulrich Drepper <drepper@redhat.com>, 2004.
+ 
+    This program is free software; you can redistribute it and/or modify
+-   it under the terms of the GNU General Public License version 2 as
+-   published by the Free Software Foundation.
++   it under the terms of the GNU General Public License as published
++   by the Free Software Foundation; version 2 of the License, or
++   (at your option) any later version.
+ 
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+@@ -22,7 +23,7 @@
+ #include <sysdep.h>
+ 
+ 
+-void
++int
+ setup_thread (struct database_dyn *db)
+ {
+ #ifdef __NR_set_tid_address
+@@ -30,7 +31,7 @@ setup_thread (struct database_dyn *db)
+   char buf[100];
+   if (confstr (_CS_GNU_LIBPTHREAD_VERSION, buf, sizeof (buf)) >= sizeof (buf)
+       || strncmp (buf, "NPTL", 4) != 0)
+-    return;
++    return 0;
+ 
+   /* Do not try this at home, kids.  We play with the SETTID address
+      even thought the process is multi-threaded.  This can only work
+@@ -42,6 +43,8 @@ setup_thread (struct database_dyn *db)
+     /* We know the kernel can reset this field when nscd terminates.
+        So, set the field to a nonzero value which indicates that nscd
+        is certainly running and clients can skip the test.  */
+-    db->head->nscd_certainly_running = 1;
++    return db->head->nscd_certainly_running = 1;
+ #endif
++
++  return 0;
+ }

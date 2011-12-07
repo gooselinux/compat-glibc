@@ -1,0 +1,22 @@
+2007-06-22  Jakub Jelinek  <jakub@redhat.com>
+
+	* pthread_getattr_np.c (pthread_getattr_np): Clear cpuset and
+	cpusetsize if pthread_getaffinity_np failed with ENOSYS.
+
+--- libc/nptl/pthread_getattr_np.c	30 May 2007 04:42:57 -0000	1.13
++++ libc/nptl/pthread_getattr_np.c	22 Jun 2007 22:13:52 -0000	1.14
+@@ -164,8 +164,12 @@ pthread_getattr_np (thread_id, attr)
+ 	{
+ 	  free (cpuset);
+ 	  if (ret == ENOSYS)
+-	    /* There is no such functionality.  */
+-	    ret = 0;
++	    {	  
++	      /* There is no such functionality.  */
++	      ret = 0;
++	      iattr->cpuset = NULL;
++	      iattr->cpusetsize = 0;
++	    }
+ 	}
+     }
+ 
